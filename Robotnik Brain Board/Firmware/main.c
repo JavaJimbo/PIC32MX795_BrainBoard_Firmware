@@ -6,6 +6,8 @@
  * Created from USB_Robotnik - USB routines removed
  * 
  * 7-20-19 Tested: USB, SPI_CS, PWM, DIR, DISABLE, AD, SD Card, Encoder counter and direction inputs.
+ * 7-25-19 Tested: RS485 on UART5 Rx and Tx both working; PUSHBUTTON input on RG15, interrupt on change for RB1-RB4
+ * 
  * 
  ***********************************************************************************/
 #include <xc.h>
@@ -47,6 +49,8 @@
 #include "Delay.h"
 #include "Defs.h"
 
+#define PUSHBUTTON_IN LATGbits.LATG15
+
 #define EncoderOne TMR1
 #define EncoderTwo TMR4
 #define EncoderThree TMR3
@@ -68,14 +72,16 @@
 #define TEST_OUT LATEbits.LATE3
 #define LED_OUT LATEbits.LATE6
 
+#define RS485_Control LATBbits.LATB0
+
 // UART FOR PC SERIAL PORT
 #define HOSTuart UART2
 #define HOSTbits U2STAbits
 #define HOST_VECTOR _UART_2_VECTOR
 
-#define MIDIuart UART1
-#define MIDIbits U1STAbits
-#define MIDI_VECTOR _UART_1_VECTOR
+#define RS485uart UART5
+#define RS485bits U5STAbits
+#define RS485_VECTOR _UART_5_VECTOR
 
 
 #define CR 13
@@ -95,9 +101,12 @@
 #define MAXBUFFER 64
 unsigned char HOSTRxBuffer[MAXBUFFER+1];
 unsigned char HOSTRxBufferFull = false;
-//unsigned char MemoryBufferFull = false;
 unsigned char HOSTTxBuffer[MAXBUFFER+1];
-unsigned char HOSTTxBufferFull = false;
+//unsigned char MemoryBufferFull = false;
+
+unsigned char RS485RxBuffer[MAXBUFFER+1] = "This is a test for the RS485 send and receive";
+unsigned char RS485RxBufferFull = false;
+unsigned char RS485TxBufferFull = false;
 //unsigned char tempBuffer[MAXBUFFER+1];
 
 unsigned char outMessage[] = "\rJust putzing around";
@@ -140,6 +149,9 @@ unsigned char TestMode = false;
 #define MAXPOTS 4
 unsigned short ADresult[MAXPOTS];
 
+unsigned short PortBRead = 0;
+unsigned char PortBflag = false;
+
 int main(void)
 {   
 unsigned short i = 0, j = 0, numBytes;
@@ -149,6 +161,8 @@ char MessageOut[] = "\rLife is a beach!";
 unsigned char ch;    
 short length = 0;
 short counter = 0;
+int PushButtonState = 0, PreviousPush = 0;
+int loopCounter = 0;
 
 
     InitializeSystem();
@@ -188,7 +202,49 @@ short counter = 0;
         FSfclose(filePtr); 
     }   
     
-    while(1);
+    printf("\r\rTesting Interrupt on change:");
+    while(1)
+    {
+        loopCounter++;
+        if (loopCounter > 100)
+        {
+            loopCounter = 0;
+            if (0 == PORTReadBits(IOPORT_G, BIT_15)) PushButtonState = 0;
+            else PushButtonState = 1;
+            
+            if (PushButtonState != PreviousPush)
+            {
+                PreviousPush = PushButtonState;
+                if (PushButtonState) printf("\rPUSH High");
+                else printf("\rPUSH Low");
+            }
+        }
+        
+        if (PortBflag)
+        {
+            PortBflag = false;        
+            printf ("\rInterrupt on Change: %02X", PortBRead);
+        }
+        
+        DelayMs(2);
+        if (RS485RxBufferFull)
+        {
+            RS485RxBufferFull = false;
+            RS485_Control = 1;
+            printf("\rReceived: %s", RS485RxBuffer);     
+            DelayMs(50);
+            i = 0;
+            do {
+                ch = RS485RxBuffer[i++];
+                if (ch == '\0')break;
+                while (!UARTTransmitterIsReady(RS485uart));
+                UARTSendDataByte(RS485uart, ch);
+                if (ch == '\r') break;
+            } while(i < MAXBUFFER);
+            DelayMs(100);
+            RS485_Control = 0;
+        }
+    }
     
     DelayMs(100);
     printf("\rTesting encoders\r");
@@ -218,12 +274,7 @@ short counter = 0;
             DelayMs(10);
         }
         
-        DelayMs(2);
-        if (HOSTRxBufferFull)
-        {
-            HOSTRxBufferFull = false;
-            printf("\rReceived: %s", HOSTRxBuffer);            
-        }
+
     }
 
     DelayMs(200);
@@ -341,6 +392,21 @@ void InitializeSystem(void)
     INTSetVectorPriority(INT_VECTOR_UART(HOSTuart), INT_PRIORITY_LEVEL_2);
     INTSetVectorSubPriority(INT_VECTOR_UART(HOSTuart), INT_SUB_PRIORITY_LEVEL_0);
 
+    // Set up RS485 UART    
+    UARTConfigure(RS485uart, UART_ENABLE_HIGH_SPEED | UART_ENABLE_PINS_TX_RX_ONLY);
+    UARTSetFifoMode(RS485uart, UART_INTERRUPT_ON_TX_DONE | UART_INTERRUPT_ON_RX_NOT_EMPTY);
+    UARTSetLineControl(RS485uart, UART_DATA_SIZE_8_BITS | UART_PARITY_NONE | UART_STOP_BITS_1);
+    UARTSetDataRate(RS485uart, SYS_FREQ, 921600);
+    UARTEnable(RS485uart, UART_ENABLE_FLAGS(UART_PERIPHERAL | UART_RX | UART_TX));
+
+    // Configure RS485 UART Interrupts
+    INTEnable(INT_SOURCE_UART_TX(RS485uart), INT_DISABLED);
+    INTEnable(INT_SOURCE_UART_RX(RS485uart), INT_ENABLED);
+    INTSetVectorPriority(INT_VECTOR_UART(RS485uart), INT_PRIORITY_LEVEL_2);
+    INTSetVectorSubPriority(INT_VECTOR_UART(RS485uart), INT_SUB_PRIORITY_LEVEL_0);  
+  
+    
+    
     //PORTClearBits(IOPORT_B, BIT_3 | BIT_12 | BIT_13 | BIT_14 | BIT_15);
     //mPORTBSetPinsDigitalOut(BIT_0 | BIT_3 | BIT_12 | BIT_13 | BIT_14 | BIT_15);
 
@@ -349,6 +415,13 @@ void InitializeSystem(void)
     
     PORTSetPinsDigitalOut(IOPORT_A, BIT_5);  // RA5 = DIR4
     //PORTClearBits(IOPORT_A, BIT_5);
+    
+    PORTSetPinsDigitalOut(IOPORT_B, BIT_0);  // RB0 = RS485 control
+    RS485_Control = 0;
+    
+    PORTSetPinsDigitalIn(IOPORT_B, BIT_1 | BIT_2 | BIT_3 | BIT_4);
+    mCNOpen(CN_ON, CN3_ENABLE | CN4_ENABLE | CN5_ENABLE | CN6_ENABLE, CN3_PULLUP_ENABLE | CN4_PULLUP_ENABLE | CN5_PULLUP_ENABLE | CN6_PULLUP_ENABLE);
+    ConfigIntCN(CHANGE_INT_ON | CHANGE_INT_PRI_2);    
     
     PORTSetPinsDigitalOut(IOPORT_D, BIT_7 | BIT_11 | BIT_13);  // RD7 = PWM_SPI_CS, RD11 = DIR3, RD13 = DIR2
     PWM_SPI_CS = 0;
@@ -365,13 +438,10 @@ void InitializeSystem(void)
     PWM_DISABLE = 0;
     
     PORTSetPinsDigitalOut(IOPORT_G, BIT_12);   // RG12 = DIR1 
-    //PORTClearBits(IOPORT_G, BIT_12);
+
+    PORTSetPinsDigitalIn(IOPORT_G, BIT_15);   // RG15 = PUSHBUTTON_IN
         
-    DIR1 = DIR2 = DIR3 = DIR4 = 0;            
-    
-    //PORTSetPinsDigitalIn(IOPORT_B, BIT_1 | BIT_4 | BIT_2);
-    //mCNOpen(CN_ON, CN6_ENABLE | CN4_ENABLE, CN6_PULLUP_ENABLE | CN4_PULLUP_ENABLE);
-    //ConfigIntCN(CHANGE_INT_ON | CHANGE_INT_PRI_2);
+    DIR1 = DIR2 = DIR3 = DIR4 = 0;                
     
     // Set up Timer 2 for PWM time base    
     T2CON = 0x00;
@@ -390,80 +460,6 @@ void InitializeSystem(void)
 	mInitAllLEDs();    
 }//end UserInit
 
-// HOST UART interrupt handler it is set at priority level 2
-void __ISR(HOST_VECTOR, ipl2) IntHostUartHandler(void) {
-    unsigned char ch;
-    static unsigned short HOSTRxIndex = 0;
-    static unsigned char arrowIndex = 0;
-    static unsigned char arrArrow[3];
-    int i;
-
-    if (HOSTbits.OERR || HOSTbits.FERR) {
-        if (UARTReceivedDataIsAvailable(HOSTuart))
-            ch = UARTGetDataByte(HOSTuart);
-        HOSTbits.OERR = 0;
-        HOSTRxIndex = 0;
-    } else if (INTGetFlag(INT_SOURCE_UART_RX(HOSTuart))) {
-        INTClearFlag(INT_SOURCE_UART_RX(HOSTuart));
-        if (UARTReceivedDataIsAvailable(HOSTuart)) {
-            // ch = toupper(UARTGetDataByte(HOSTuart));
-            ch = UARTGetDataByte(HOSTuart);
-            /*
-            if (mode == STANDBY)
-            {
-                if (ch == 27 && arrowIndex == 0) 
-                    arrowIndex++;
-                else if (ch == 91 && arrowIndex == 1)
-                    arrowIndex++;
-                else if ((ch >= 65 && ch <=68) && arrowIndex == 2)                
-                {
-                    command = ch;
-                    arrowIndex = 0;
-                }
-            }
-            
-            if (ch == SPACE)
-            {
-                if (mode != STANDBY) command = SPACE;
-            }
-            else if (ch < 27 && ch != CR) 
-            {
-                command = ch;
-            }
-            else
-            */
-            {
-                if (ch == LF || ch == 0);
-                else if (ch == BACKSPACE) 
-                {
-                    while (!UARTTransmitterIsReady(HOSTuart));
-                    UARTSendDataByte(HOSTuart, ' ');
-                    while (!UARTTransmitterIsReady(HOSTuart));
-                    UARTSendDataByte(HOSTuart, BACKSPACE);
-                    if (HOSTRxIndex > 0) HOSTRxIndex--;
-                } 
-                else if (ch == CR) 
-                {
-                    if (HOSTRxIndex < (MAXBUFFER-1)) 
-                    {
-                        HOSTRxBuffer[HOSTRxIndex] = CR;
-                        HOSTRxBuffer[HOSTRxIndex + 1] = '\0'; 
-                        HOSTRxBufferFull = true;
-                    }
-                    HOSTRxIndex = 0;
-                }                
-                else 
-                {
-                    if (HOSTRxIndex < (MAXBUFFER-1))
-                        HOSTRxBuffer[HOSTRxIndex++] = ch;                    
-                }
-            }
-        }
-    }
-    if (INTGetFlag(INT_SOURCE_UART_TX(HOSTuart))) {
-        INTClearFlag(INT_SOURCE_UART_TX(HOSTuart));
-    }
-}
 
 
 void __ISR(_TIMER_2_VECTOR, ipl5) Timer2Handler(void) 
@@ -579,6 +575,139 @@ void __ISR(_ADC_VECTOR, ipl6) ADHandler(void)
         ADresult[i] = (unsigned short) ReadADC10(offSet + i); // read the result of channel 0 conversion from the idle buffer
 }
 
+// RS485 UART interrupt handler it is set at priority level 2
+void __ISR(RS485_VECTOR, ipl2) IntRS485UartHandler(void) {
+    unsigned char ch;
+    static unsigned short RS485RxIndex = 0;
+
+    if (RS485bits.OERR || RS485bits.FERR) {
+        if (UARTReceivedDataIsAvailable(RS485uart))
+            ch = UARTGetDataByte(RS485uart);
+        RS485bits.OERR = 0;
+        RS485RxIndex = 0;
+    } else if (INTGetFlag(INT_SOURCE_UART_RX(RS485uart))) {
+        INTClearFlag(INT_SOURCE_UART_RX(RS485uart));
+        if (UARTReceivedDataIsAvailable(RS485uart)) {
+            ch = UARTGetDataByte(RS485uart);
+            {
+                if (ch == LF || ch == 0);
+                else if (ch == CR) 
+                {
+                    if (RS485RxIndex < (MAXBUFFER-1)) 
+                    {
+                        RS485RxBuffer[RS485RxIndex] = CR;
+                        RS485RxBuffer[RS485RxIndex + 1] = '\0'; 
+                        RS485RxBufferFull = true;
+                    }
+                    RS485RxIndex = 0;
+                }                
+                else 
+                {
+                    if (RS485RxIndex < (MAXBUFFER-1))
+                        RS485RxBuffer[RS485RxIndex++] = ch;                    
+                }
+            }
+        }
+    }
+    if (INTGetFlag(INT_SOURCE_UART_TX(RS485uart))) {
+        INTClearFlag(INT_SOURCE_UART_TX(RS485uart));
+    }
+}
+
+// HOST UART interrupt handler it is set at priority level 2
+void __ISR(HOST_VECTOR, ipl2) IntHostUartHandler(void) {
+    unsigned char ch;
+    static unsigned short HOSTRxIndex = 0;
+    static unsigned char arrowIndex = 0;
+    static unsigned char arrArrow[3];
+    int i;
+
+    if (HOSTbits.OERR || HOSTbits.FERR) {
+        if (UARTReceivedDataIsAvailable(HOSTuart))
+            ch = UARTGetDataByte(HOSTuart);
+        HOSTbits.OERR = 0;
+        HOSTRxIndex = 0;
+    } else if (INTGetFlag(INT_SOURCE_UART_RX(HOSTuart))) {
+        INTClearFlag(INT_SOURCE_UART_RX(HOSTuart));
+        if (UARTReceivedDataIsAvailable(HOSTuart)) {
+            // ch = toupper(UARTGetDataByte(HOSTuart));
+            ch = UARTGetDataByte(HOSTuart);
+            /*
+            if (mode == STANDBY)
+            {
+                if (ch == 27 && arrowIndex == 0) 
+                    arrowIndex++;
+                else if (ch == 91 && arrowIndex == 1)
+                    arrowIndex++;
+                else if ((ch >= 65 && ch <=68) && arrowIndex == 2)                
+                {
+                    command = ch;
+                    arrowIndex = 0;
+                }
+            }
+            
+            if (ch == SPACE)
+            {
+                if (mode != STANDBY) command = SPACE;
+            }
+            else if (ch < 27 && ch != CR) 
+            {
+                command = ch;
+            }
+            else
+            */
+            {
+                if (ch == LF || ch == 0);
+                else if (ch == BACKSPACE) 
+                {
+                    while (!UARTTransmitterIsReady(HOSTuart));
+                    UARTSendDataByte(HOSTuart, ' ');
+                    while (!UARTTransmitterIsReady(HOSTuart));
+                    UARTSendDataByte(HOSTuart, BACKSPACE);
+                    if (HOSTRxIndex > 0) HOSTRxIndex--;
+                } 
+                else if (ch == CR) 
+                {
+                    if (HOSTRxIndex < (MAXBUFFER-1)) 
+                    {
+                        HOSTRxBuffer[HOSTRxIndex] = CR;
+                        HOSTRxBuffer[HOSTRxIndex + 1] = '\0'; 
+                        HOSTRxBufferFull = true;
+                    }
+                    HOSTRxIndex = 0;
+                }                
+                else 
+                {
+                    if (HOSTRxIndex < (MAXBUFFER-1))
+                        HOSTRxBuffer[HOSTRxIndex++] = ch;                    
+                }
+            }
+        }
+    }
+    if (INTGetFlag(INT_SOURCE_UART_TX(HOSTuart))) {
+        INTClearFlag(INT_SOURCE_UART_TX(HOSTuart));
+    }
+}
+
+/******************************************************************************
+ *	Change Notice Interrupt Service Routine
+ *
+ *   Note: Switch debouncing is not performed.
+ *   Code comes here if SW2 (CN16) PORTD.RD7 is pressed or released.
+ *   The user must read the IOPORT to clear the IO pin change notice mismatch
+ *	condition first, then clear the change notice interrupt flag.
+ ******************************************************************************/
+
+void __ISR(_CHANGE_NOTICE_VECTOR, ipl2) ChangeNotice_Handler(void) 
+{    
+    // Step #1 - always clear the mismatch condition first
+    // dummy = PORTReadBits(IOPORT_B, BIT_4 | BIT_2) & 0x0F;
+    PortBRead = PORTB;// & 0x14;
+    PortBflag = true;
+
+    // Step #2 - then clear the interrupt flag
+    mCNClearIntFlag();
+}
 
 
 /** EOF main.c *************************************************/
