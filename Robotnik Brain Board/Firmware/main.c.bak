@@ -12,7 +12,7 @@
  * 8-11-19: Got I2C EEprom working.
  * 8-13-19 Substituted C:\Program Files (x86)\Microchip\xc32\v1.30\pic32-libs\include\lega-c\peripheral
  * Adapted I2C routines from Super Copter on Electro Tech Online: https://www.electro-tech-online.com/threads/pic32-c32-cant-read-i2c-bus.145272/
- * 8-15-19: Recompiled. Added files for Adafruit PCA9685 servo controller. Works great with pot input using PIC I2C3 port.
+ * 8-15-19: Recompiled. Added files for Adafruit PCA9685 servo controller. Works great with pot input.
  ***********************************************************************************/
 #include <xc.h>
 #include "HardwareProfile.h"

@@ -63,7 +63,8 @@
 
     //#define RUN_AT_48MHZ
     //#define RUN_AT_24MHZ
-    #define RUN_AT_60MHZ
+    // #define RUN_AT_60MHZ
+    #define RUN_AT_80MHZ
     
     // Various clock values
     #if defined(RUN_AT_48MHZ)
@@ -82,6 +83,7 @@
         #define GetSystemClock()            (96000000ul)
         #define GetPeripheralClock()        (GetSystemClock()/2) 
         #define GetInstructionClock()       (GetSystemClock())
+    #else        
         #error Choose a speed
     #endif
 

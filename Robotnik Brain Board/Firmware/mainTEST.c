@@ -9,10 +9,7 @@
  * 7-25-19 Tested: RS485 on UART5 Rx and Tx both working; PUSHBUTTON input on RG15, interrupt on change for RB1-RB4
  * 8-05-19 SD_CS is RE4
  * 8-9-19: Testing PWM with ADC inputs. Everything works!
- * 8-11-19: Got I2C EEprom working.
- * 8-13-19 Substituted C:\Program Files (x86)\Microchip\xc32\v1.30\pic32-libs\include\lega-c\peripheral
- * Adapted I2C routines from Super Copter on Electro Tech Online: https://www.electro-tech-online.com/threads/pic32-c32-cant-read-i2c-bus.145272/
- * 8-15-19: Recompiled. Added files for Adafruit PCA9685 servo controller. Works great with pot input using PIC I2C3 port.
+ * 
  ***********************************************************************************/
 #include <xc.h>
 #include "HardwareProfile.h"
@@ -21,16 +18,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-
-#include "GenericTypeDefs.h"
-#include "Compiler.h"
-#include "HardwareProfile.h"
-#include "I2C_4BUS_EEPROM_PIC32.h"
-
-#include "FSIO.h"
-#include "Delay.h"
-#include "Defs.h"
 
 /** CONFIGURATION **************************************************/
 #pragma config UPLLEN   = ON        // USB PLL Enabled
@@ -54,9 +41,16 @@
 
 /** I N C L U D E S **********************************************************/
 
+#include "GenericTypeDefs.h"
+#include "Compiler.h"
+#include "HardwareProfile.h"
+#include <ctype.h>
+
+#include "FSIO.h"
+#include "Delay.h"
+#include "Defs.h"
 
 #define PUSHBUTTON_IN LATGbits.LATG15
-
 
 #define EncoderOne TMR1
 #define EncoderTwo TMR5
@@ -109,12 +103,11 @@
 unsigned char HOSTRxBuffer[MAXBUFFER+1];
 unsigned char HOSTRxBufferFull = false;
 unsigned char HOSTTxBuffer[MAXBUFFER+1];
-
 //unsigned char MemoryBufferFull = false;
 
+unsigned char RS485RxBuffer[MAXBUFFER+1] = "This is a test for the RS485 send and receive";
 unsigned char RS485RxBufferFull = false;
 unsigned char RS485TxBufferFull = false;
-unsigned char RS485RxBuffer[MAXBUFFER+1];
 //unsigned char tempBuffer[MAXBUFFER+1];
 
 unsigned char outMessage[] = "\rJust putzing around";
@@ -176,45 +169,12 @@ short counter = 0;
 int PushButtonState = 0, PreviousPush = 0;
 int loopCounter = 0;
 unsigned char arrData[4];
-unsigned char arrI2C1Test[128] = "TAKE #1: Testing I2C1 Reads and Writes";
-unsigned char arrI2C3Test[128] = "Take #2: Testing I2C3 Yadda yadda yadda";
-unsigned char dataByte = 0;
-short servoPos;
-
-unsigned char arrI2CTestIn[128];
-
 
     InitializeSystem();
-    
-    printf("\r\rTESTING PCA AND EEPROM");    
-    initI2C(I2C1);
-       
-    
     SD_CS = 1;
     PWM_SPI_CS = 1;
     
-    DelayMs(400);
-    
-    length = strlen(arrI2C1Test);
-    DelayMs(100);
-    printf("\rWriting I2C1 block: %d bytes", length);
-    EepromWriteBlock(I2C1, EEPROM_ADDRESS, 0x0000, arrI2C1Test, length);
-    printf ("Read byte: %d", (int) dataByte);
-    DelayMs(100);    
-    printf("\rReading I2C1 block");
-    EepromReadBlock (I2C1, EEPROM_ADDRESS, 0x0000, arrI2CTestIn, length);    
-    arrI2CTestIn[length] = '\0';
-    printf("\rRead Data In: %s", arrI2CTestIn);   
-    printf("\rDONE");
-    
-    
-    DelayMs(100);
-    printf("\r\rFeather Servo NO USB version");
-    printf("\rInitializing Feather Servo Board at address 0x80: ");
-    #define PCA9685_ADDRESS 0x80 // Basic default address for Adafruit Feather Servo Board 
-    if (initializePCA9685(PCA9685_ADDRESS)) printf(" SUCCESS");
-    else printf(" ERROR");       
-    
+    printf("\rTESTING PWM:");
     mAD1IntEnable(INT_ENABLED);
     
     DIR1 = 0;
@@ -230,27 +190,15 @@ unsigned char arrI2CTestIn[128];
     OC4RS = 0;
     OC5RS = 0;
     
-    
     while(1)
     {
         if (ADready)
         {
             ADready = false;
+            mAD1IntEnable(INT_ENABLED);
             EnableAD = false;
             
-            // printf("\r#%d: POT1 = %d, POT2 = %d, POT3 = %d POT4 = %d", counter++, ADresult[0], ADresult[1], ADresult[2], ADresult[3]);
-            
-            servoPos = (short)(ADresult[0]/4) + 22;      
-            //T2CONbits.TON = 0; // Let her rip
-            
-            //ConfigIntTimer2(T2_INT_OFF | T2_INT_PRIOR_2);            
-            if (!setPCA9685outputs(PCA9685_ADDRESS, 0, 0, servoPos)) printf(" ERROR");         
-            printf("\r#%d: Servo 0 = %d", counter++, ADresult[0]);
-                        
-            mAD1IntEnable(INT_ENABLED);
-            //ConfigIntTimer2(T2_INT_ON | T2_INT_PRIOR_2);
-            //T2CONbits.TON = 1; // Let her rip
-
+            printf("\r#%d: POT1 = %d, POT2 = %d, POT3 = %d POT4 = %d", counter++, ADresult[0], ADresult[1], ADresult[2], ADresult[3]);
             //OC2RS = ADresult[0] * 2;
             //OC3RS = ADresult[1] * 2;
             //OC4RS = ADresult[2] * 2;
@@ -270,13 +218,12 @@ unsigned char arrI2CTestIn[128];
             if (EncoderFourDir) printf("Enc Dir4: HIGH, ");
             else printf("Enc Dir4: LOW, ");            
             */
-            DelayMs(10);
+            DelayMs(100);
         }
-        DelayMs(1);
-        //DelayMs(200);
-        //PWM_SPI_CS = 0;
-        //ReadHBridgeData(1, arrData);        
-        //PWM_SPI_CS = 1;
+        DelayMs(200);
+        PWM_SPI_CS = 0;
+        ReadHBridgeData(1, arrData);        
+        PWM_SPI_CS = 1;
         
         // printf("\r#%d: Data = %02X, %02X, %02X, %02X", loopCounter++, (int)arrData[0], (int)arrData[1], (int)arrData[2], (int)arrData[3]);        
     }
@@ -407,7 +354,6 @@ void InitializeSystem(void)
     
     ConfigAd();
     
-    
     // Set up timers as counters
     T1CON = 0x00;
     T1CONbits.TCS = 1; // Use external counter as input source (motor encoder)
@@ -508,7 +454,6 @@ void InitializeSystem(void)
     INTSetVectorPriority(INT_VECTOR_UART(HOSTuart), INT_PRIORITY_LEVEL_2);
     INTSetVectorSubPriority(INT_VECTOR_UART(HOSTuart), INT_SUB_PRIORITY_LEVEL_0);
 
-    
     // Set up RS485 UART    
     UARTConfigure(RS485uart, UART_ENABLE_HIGH_SPEED | UART_ENABLE_PINS_TX_RX_ONLY);
     UARTSetFifoMode(RS485uart, UART_INTERRUPT_ON_TX_DONE | UART_INTERRUPT_ON_RX_NOT_EMPTY);
@@ -542,9 +487,8 @@ void InitializeSystem(void)
     ConfigIntCN(CHANGE_INT_ON | CHANGE_INT_PRI_2);    
     */
     
-    PORTSetPinsDigitalOut(IOPORT_D, BIT_7 | BIT_8 | BIT_11 | BIT_13);  // RD7 = PWM_SPI_CS, RD8 = EEPROM_WP, RD11 = DIR3, RD13 = DIR2
+    PORTSetPinsDigitalOut(IOPORT_D, BIT_7 | BIT_11 | BIT_13);  // RD7 = PWM_SPI_CS, RD11 = DIR3, RD13 = DIR2
     PWM_SPI_CS = 0;
-    EEPROM_WP = 1;
     //PORTClearBits(IOPORT_D, BIT_11 | BIT_13);
     // PORTSetBits(IOPORT_D, BIT_11|BIT_13);    
     
@@ -586,8 +530,8 @@ void __ISR(_TIMER_2_VECTOR, ipl5) Timer2Handler(void)
     static short milliSecondCounter = 0;
     mT2ClearIntFlag(); // clear the interrupt flag
     
-    //if (TEST_OUT) TEST_OUT = 0;
-    //else TEST_OUT = 1;    
+    if (TEST_OUT) TEST_OUT = 0;
+    else TEST_OUT = 1;    
     
     PIDupdateCounter++;
     if (PIDupdateCounter >= 30)
@@ -624,8 +568,8 @@ void __ISR(_TIMER_2_VECTOR, ipl5) Timer2Handler(void)
 
 void ConfigAd(void) 
 {
-    // mPORTBSetPinsAnalogIn(BIT_12 | BIT_13 | BIT_14 | BIT_15); // $$$$
-    mPORTBSetPinsAnalogIn(BIT_1 | BIT_2 | BIT_3 | BIT_4); // $$$$
+    mPORTBSetPinsAnalogIn(BIT_12 | BIT_13 | BIT_14 | BIT_15); // $$$$
+    // mPORTBSetPinsAnalogIn(BIT_1 | BIT_2 | BIT_3 | BIT_4); // $$$$
 
     // ---- configure and enable the ADC ----
 
@@ -643,20 +587,19 @@ void ConfigAd(void)
     // #define PARAM3  ADC_CONV_CLK_INTERNAL_RC | ADC_SAMPLE_TIME_31
 #define PARAM3  ADC_CONV_CLK_PB | ADC_SAMPLE_TIME_31 | ADC_CONV_CLK_32Tcy
 
-/*
+
 #define PARAM4    ENABLE_AN12_ANA | ENABLE_AN13_ANA | ENABLE_AN14_ANA | ENABLE_AN15_ANA
 #define PARAM5 SKIP_SCAN_AN0 | SKIP_SCAN_AN1 | SKIP_SCAN_AN2 | SKIP_SCAN_AN3 |\
 SKIP_SCAN_AN4 | SKIP_SCAN_AN5 | SKIP_SCAN_AN6 | SKIP_SCAN_AN7 |\
 SKIP_SCAN_AN8 | SKIP_SCAN_AN9 | SKIP_SCAN_AN10 | SKIP_SCAN_AN11   
-*/
-    
 
+/*
 #define PARAM4    ENABLE_AN1_ANA | ENABLE_AN2_ANA | ENABLE_AN3_ANA | ENABLE_AN4_ANA    
 #define PARAM5 SKIP_SCAN_AN0 |\
 SKIP_SCAN_AN5 | SKIP_SCAN_AN6 | SKIP_SCAN_AN7 |\
 SKIP_SCAN_AN8 | SKIP_SCAN_AN9 | SKIP_SCAN_AN10 | SKIP_SCAN_AN11 |\
 SKIP_SCAN_AN12 | SKIP_SCAN_AN13 | SKIP_SCAN_AN14 | SKIP_SCAN_AN15
-
+*/
 
     // set negative reference to Vref for Mux A
     SetChanADC10(ADC_CH0_NEG_SAMPLEA_NVREF);
@@ -811,6 +754,8 @@ unsigned char ReadHBridgeData(unsigned char NumberOfDevices, unsigned char *ptrD
     return 0;
 }
 
+
+
 #define ESC 27
 #define CR 13
 #define BACKSPACE 8
@@ -857,4 +802,84 @@ static unsigned long i = 0;
     
     if (INTGetFlag(INT_SOURCE_UART_TX(HOSTuart))) 
         INTClearFlag(INT_SOURCE_UART_TX(HOSTuart));            
+}
+
+
+
+
+
+
+// HOST UART interrupt handler it is set at priority level 2
+void __ISR(HOST_VECTOR, ipl2) IntHostUartHandler(void) {
+    unsigned char ch;
+    static unsigned short HOSTRxIndex = 0;
+    static unsigned char arrowIndex = 0;
+    static unsigned char arrArrow[3];
+    int i;
+
+    if (HOSTbits.OERR || HOSTbits.FERR) {
+        if (UARTReceivedDataIsAvailable(HOSTuart))
+            ch = UARTGetDataByte(HOSTuart);
+        HOSTbits.OERR = 0;
+        HOSTRxIndex = 0;
+    } else if (INTGetFlag(INT_SOURCE_UART_RX(HOSTuart))) {
+        INTClearFlag(INT_SOURCE_UART_RX(HOSTuart));
+        if (UARTReceivedDataIsAvailable(HOSTuart)) {
+            // ch = toupper(UARTGetDataByte(HOSTuart));
+            ch = UARTGetDataByte(HOSTuart);
+            /*
+            if (mode == STANDBY)
+            {
+                if (ch == 27 && arrowIndex == 0) 
+                    arrowIndex++;
+                else if (ch == 91 && arrowIndex == 1)
+                    arrowIndex++;
+                else if ((ch >= 65 && ch <=68) && arrowIndex == 2)                
+                {
+                    command = ch;
+                    arrowIndex = 0;
+                }
+            }
+            
+            if (ch == SPACE)
+            {
+                if (mode != STANDBY) command = SPACE;
+            }
+            else if (ch < 27 && ch != CR) 
+            {
+                command = ch;
+            }
+            else
+            */
+            {
+                if (ch == LF || ch == 0);
+                else if (ch == BACKSPACE) 
+                {
+                    while (!UARTTransmitterIsReady(HOSTuart));
+                    UARTSendDataByte(HOSTuart, ' ');
+                    while (!UARTTransmitterIsReady(HOSTuart));
+                    UARTSendDataByte(HOSTuart, BACKSPACE);
+                    if (HOSTRxIndex > 0) HOSTRxIndex--;
+                } 
+                else if (ch == CR) 
+                {
+                    if (HOSTRxIndex < (MAXBUFFER-1)) 
+                    {
+                        HOSTRxBuffer[HOSTRxIndex] = CR;
+                        HOSTRxBuffer[HOSTRxIndex + 1] = '\0'; 
+                        HOSTRxBufferFull = true;
+                    }
+                    HOSTRxIndex = 0;
+                }                
+                else 
+                {
+                    if (HOSTRxIndex < (MAXBUFFER-1))
+                        HOSTRxBuffer[HOSTRxIndex++] = ch;                    
+                }
+            }
+        }
+    }
+    if (INTGetFlag(INT_SOURCE_UART_TX(HOSTuart))) {
+        INTClearFlag(INT_SOURCE_UART_TX(HOSTuart));
+    }
 }

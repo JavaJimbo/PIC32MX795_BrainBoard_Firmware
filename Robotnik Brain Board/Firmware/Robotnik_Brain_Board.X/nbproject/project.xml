@@ -16,6 +16,7 @@
                 <sourceRootElem>../../Microchip/USB</sourceRootElem>
                 <sourceRootElem>../../Microchip/Include</sourceRootElem>
                 <sourceRootElem>..</sourceRootElem>
+                <sourceRootElem>../../../../../../../Program Files (x86)/Microchip/xc32/v1.30/pic32mx/include/lega-c/peripheral/legacy</sourceRootElem>
             </sourceRootList>
             <confList>
                 <confElem>

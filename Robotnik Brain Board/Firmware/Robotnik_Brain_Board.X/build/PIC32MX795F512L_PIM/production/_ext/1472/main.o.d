@@ -6,8 +6,9 @@ build/PIC32MX795F512L_PIM/production/_ext/1472/main.o:  \
 ../Delay.h  \
 ../GenericTypeDefs.h  \
 ../Compiler.h  \
+ ../I2C_4BUS_EEPROM_PIC32.h  \
 ../FSIO.h  \
- ../FSconfig.h  \
+../FSconfig.h  \
 ../Defs.h  \
 ../FSDefs.h  \
-../SD-SPI.h 
+ ../SD-SPI.h 

@@ -15,8 +15,8 @@
  * Software License Agreement
  *
  * The software supplied herewith by Microchip Technology Incorporated
- * (the "Company") for its PICmicro® Microcontroller is intended and
- * supplied to you, the Company’s customer, for use solely and
+ * (the "Company") for its PICmicroï¿½ Microcontroller is intended and
+ * supplied to you, the Companyï¿½s customer, for use solely and
  * exclusively on Microchip PICmicro Microcontroller products. The
  * software is owned by the Company and/or its supplier, and is
  * protected under applicable copyright laws. All rights are reserved.
@@ -1885,7 +1885,7 @@ void CloseSPIM (void)
 
 #elif defined __18CXX
 
-    SPICON1 &= 0xDF;
+    SPICON &= 0xDF;
 
 #endif
 }
@@ -1924,7 +1924,7 @@ unsigned char WriteSPIM( unsigned char data_out )
     clear = SPIBUF;
     SPI_INTERRUPT_FLAG = 0;
     SPIBUF = data_out;
-    if (SPICON1 & 0x80)
+    if (SPICON & 0x80)
         return -1;
     else
         while (!SPI_INTERRUPT_FLAG);
@@ -2017,16 +2017,16 @@ void OpenSPIM( unsigned int sync_mode)
         #else
             SPIBRG = SPICalutateBRG(GetPeripheralClock(), SPI_FREQUENCY);
         #endif
-        SPICON1bits.CKP = 1;
-        SPICON1bits.CKE = 0;
+        SPICONbits.CKP = 1;
+        SPICONbits.CKE = 0;
     #elif defined __C30__ //must be PIC24 or dsPIC device
-        SPICON1 = 0x0000;              // power on state
-        SPICON1 |= sync_mode;          // select serial mode 
-        SPICON1bits.CKP = 1;
-        SPICON1bits.CKE = 0;
+        SPICON = 0x0000;              // power on state
+        SPICON |= sync_mode;          // select serial mode 
+        SPICONbits.CKP = 1;
+        SPICONbits.CKE = 0;
     #else   //must be __18CXX (PIC18 processor)
-        SPICON1 = 0x00;         
-        SPICON1 |= sync_mode;   
+        SPICON = 0x00;         
+        SPICON |= sync_mode;   
         SPISTATbits.CKE = 1;
     #endif
 
@@ -2210,7 +2210,7 @@ void InitSPISlowMode(void)
     #else //must be PIC18 device
         //Make sure the SPI module doesn't control the bus, will use 
         //bit-banged SPI instead, for slow mode initialization operation
-        SPICON1 = 0x00;
+        SPICON = 0x00;
         SPICLOCKLAT = 0;
         SPIOUTLAT = 1;
         SPICLOCK = OUTPUT;
