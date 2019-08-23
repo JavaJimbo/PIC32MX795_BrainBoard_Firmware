@@ -1,8 +1,9 @@
 /**********************************************************************************
+ * PROJECT: ROBOTNIK BRAIN BOARD
  * main.c
  *
  * Compiled for PIC32MX795 XC32 compiler version 1.30
- * Project: Robotnik Brain Board
+ 
  * Created from USB_Robotnik - USB routines removed
  * 
  * 7-20-19 Tested: USB, SPI_CS, PWM, DIR, DISABLE, AD, SD Card, Encoder counter and direction inputs.
@@ -13,6 +14,7 @@
  * 8-13-19 Substituted C:\Program Files (x86)\Microchip\xc32\v1.30\pic32-libs\include\lega-c\peripheral
  * Adapted I2C routines from Super Copter on Electro Tech Online: https://www.electro-tech-online.com/threads/pic32-c32-cant-read-i2c-bus.145272/
  * 8-15-19: Recompiled. Added files for Adafruit PCA9685 servo controller. Works great with pot input using PIC I2C3 port.
+ * 8-23-19: DMA for RX: got rid of bugs - works great at 921600 baud
  ***********************************************************************************/
 #include <xc.h>
 #include "HardwareProfile.h"
@@ -105,7 +107,7 @@
 #define true TRUE
 /** V A R I A B L E S ********************************************************/
 // #define MAXBUFFER CDC_DATA_IN_EP_SIZE
-#define MAXBUFFER 64
+#define MAXBUFFER 255
 unsigned char HOSTRxBuffer[MAXBUFFER+1];
 unsigned char HOSTRxBufferFull = false;
 unsigned char HOSTTxBuffer[MAXBUFFER+1];
@@ -115,9 +117,10 @@ unsigned char HOSTTxBuffer[MAXBUFFER+1];
 unsigned char RS485RxBufferFull = false;
 unsigned char RS485TxBufferFull = false;
 unsigned char RS485RxBuffer[MAXBUFFER+1];
-//unsigned char tempBuffer[MAXBUFFER+1];
+unsigned char RS485RxBufferCopy[MAXBUFFER+1];
 
 unsigned char outMessage[] = "\rJust putzing around";
+long ActualRS485BaudRate = 0;
 
 // short MIDItimeout = 0;
 
@@ -164,6 +167,16 @@ unsigned char ReadHBridgeData(unsigned char NumberOfDevices, unsigned char *ptrD
 void initHBridgeSPI(void);
 unsigned char ADready = false;
 
+void ClearCopyBuffer()
+{
+    int i;
+    for (i = 0; i < MAXBUFFER; i++)
+    {
+        RS485RxBufferCopy[i] = '\0';
+        // RS485RxBuffer[i] = '\0';
+    }
+}
+
 int main(void)
 {   
 unsigned short i = 0, j = 0, numBytes;
@@ -180,11 +193,22 @@ unsigned char arrI2C1Test[128] = "TAKE #1: Testing I2C1 Reads and Writes";
 unsigned char arrI2C3Test[128] = "Take #2: Testing I2C3 Yadda yadda yadda";
 unsigned char dataByte = 0;
 short servoPos;
-
 unsigned char arrI2CTestIn[128];
 
 
     InitializeSystem();
+    printf("\r\rTesting RS485 Receiving DMA #1 @ %d baud\r", ActualRS485BaudRate);
+    
+    while(1)
+    {
+        if (RS485RxBufferFull)
+        {
+            RS485RxBufferFull = false;
+            printf("RX DMA: %s", RS485RxBufferCopy);     
+            ClearCopyBuffer();
+        }
+        DelayMs(1);
+    }
     
     printf("\r\rTESTING PCA AND EEPROM");    
     initI2C(I2C1);
@@ -342,23 +366,6 @@ unsigned char arrI2CTestIn[128];
         }
         
         DelayMs(2);
-        if (RS485RxBufferFull)
-        {
-            RS485RxBufferFull = false;
-            RS485_Control = 1;
-            printf("\rReceived: %s", RS485RxBuffer);     
-            DelayMs(50);
-            i = 0;
-            do {
-                ch = RS485RxBuffer[i++];
-                if (ch == '\0')break;
-                while (!UARTTransmitterIsReady(RS485uart));
-                UARTSendDataByte(RS485uart, ch);
-                if (ch == '\r') break;
-            } while(i < MAXBUFFER);
-            DelayMs(100);
-            RS485_Control = 0;
-        }
     }
     
     DelayMs(100);
@@ -398,7 +405,7 @@ unsigned char arrI2CTestIn[128];
 
 void InitializeSystem(void) 
 {
-	unsigned char i; 
+	int i; 
     
     SYSTEMConfigPerformance(80000000);
     
@@ -507,21 +514,45 @@ void InitializeSystem(void)
     INTEnable(INT_SOURCE_UART_RX(HOSTuart), INT_ENABLED);
     INTSetVectorPriority(INT_VECTOR_UART(HOSTuart), INT_PRIORITY_LEVEL_2);
     INTSetVectorSubPriority(INT_VECTOR_UART(HOSTuart), INT_SUB_PRIORITY_LEVEL_0);
-
     
     // Set up RS485 UART    
     UARTConfigure(RS485uart, UART_ENABLE_HIGH_SPEED | UART_ENABLE_PINS_TX_RX_ONLY);
     UARTSetFifoMode(RS485uart, UART_INTERRUPT_ON_TX_DONE | UART_INTERRUPT_ON_RX_NOT_EMPTY);
     UARTSetLineControl(RS485uart, UART_DATA_SIZE_8_BITS | UART_PARITY_NONE | UART_STOP_BITS_1);
-    UARTSetDataRate(RS485uart, SYS_FREQ, 921600);
+    ActualRS485BaudRate = UARTSetDataRate(RS485uart, SYS_FREQ, 921600);
+    // ActualRS485BaudRate = UARTSetDataRate(RS485uart, SYS_FREQ, 2000000);
     UARTEnable(RS485uart, UART_ENABLE_FLAGS(UART_PERIPHERAL | UART_RX | UART_TX));
 
     // Configure RS485 UART Interrupts
     INTEnable(INT_SOURCE_UART_TX(RS485uart), INT_DISABLED);
-    INTEnable(INT_SOURCE_UART_RX(RS485uart), INT_ENABLED);
-    INTSetVectorPriority(INT_VECTOR_UART(RS485uart), INT_PRIORITY_LEVEL_2);
-    INTSetVectorSubPriority(INT_VECTOR_UART(RS485uart), INT_SUB_PRIORITY_LEVEL_0);  
-  
+    INTEnable(INT_SOURCE_UART_RX(RS485uart), INT_DISABLED);
+    //INTSetVectorPriority(INT_VECTOR_UART(RS485uart), INT_PRIORITY_LEVEL_2);
+    //INTSetVectorSubPriority(INT_VECTOR_UART(RS485uart), INT_SUB_PRIORITY_LEVEL_0);  
+    
+    
+    
+    // CONFIGURE DMA CHANNEL 0 FOR UART 5 INTERRUPT ON MATCH   
+    
+    
+    for (i = 0; i < MAXBUFFER; i++) RS485RxBufferCopy[i] = 0x00;     
+    
+    DmaChnOpen(DMA_CHANNEL0, 1, DMA_OPEN_MATCH);    
+    DmaChnSetMatchPattern(DMA_CHANNEL0, '\r');	// set < as ending character
+    // Set the transfer event control: what event is to start the DMA transfer    
+	// We want the UART2 rx interrupt to start our transfer
+	// also we want to enable the pattern match: transfer stops upon detection of CR
+	DmaChnSetEventControl(DMA_CHANNEL0, DMA_EV_START_IRQ_EN|DMA_EV_MATCH_EN|DMA_EV_START_IRQ(_UART5_RX_IRQ));            
+	// Set the transfer source and dest addresses, source and dest sizes and the cell size
+	DmaChnSetTxfer(DMA_CHANNEL0, (void*)&U5RXREG, RS485RxBuffer, 1, MAXBUFFER, 1);    
+    // Enable the transfer done event flag:
+    DmaChnSetEvEnableFlags(DMA_CHANNEL0, DMA_EV_BLOCK_DONE);		// enable the transfer done interrupt: pattern match or all the characters transferred
+	INTSetVectorPriority(INT_VECTOR_DMA(DMA_CHANNEL0), INT_PRIORITY_LEVEL_5);		// set INT controller priority
+	INTSetVectorSubPriority(INT_VECTOR_DMA(DMA_CHANNEL0), INT_SUB_PRIORITY_LEVEL_3);		// set INT controller sub-priority
+	INTEnable(INT_SOURCE_DMA(DMA_CHANNEL0), INT_ENABLED);		// enable the chn interrupt in the INT controller    
+    // Once we configured the DMA channel we can enable it
+    DmaChnEnable(DMA_CHANNEL0);        
+       
+   
     
     
     //PORTClearBits(IOPORT_B, BIT_3 | BIT_12 | BIT_13 | BIT_14 | BIT_15);
@@ -689,44 +720,6 @@ void __ISR(_ADC_VECTOR, ipl6) ADHandler(void)
     ADready = true;
 }
 
-// RS485 UART interrupt handler it is set at priority level 2
-void __ISR(RS485_VECTOR, ipl2) IntRS485UartHandler(void) {
-    unsigned char ch;
-    static unsigned short RS485RxIndex = 0;
-
-    if (RS485bits.OERR || RS485bits.FERR) {
-        if (UARTReceivedDataIsAvailable(RS485uart))
-            ch = UARTGetDataByte(RS485uart);
-        RS485bits.OERR = 0;
-        RS485RxIndex = 0;
-    } else if (INTGetFlag(INT_SOURCE_UART_RX(RS485uart))) {
-        INTClearFlag(INT_SOURCE_UART_RX(RS485uart));
-        if (UARTReceivedDataIsAvailable(RS485uart)) {
-            ch = UARTGetDataByte(RS485uart);
-            {
-                if (ch == LF || ch == 0);
-                else if (ch == CR) 
-                {
-                    if (RS485RxIndex < (MAXBUFFER-1)) 
-                    {
-                        RS485RxBuffer[RS485RxIndex] = CR;
-                        RS485RxBuffer[RS485RxIndex + 1] = '\0'; 
-                        RS485RxBufferFull = true;
-                    }
-                    RS485RxIndex = 0;
-                }                
-                else 
-                {
-                    if (RS485RxIndex < (MAXBUFFER-1))
-                        RS485RxBuffer[RS485RxIndex++] = ch;                    
-                }
-            }
-        }
-    }
-    if (INTGetFlag(INT_SOURCE_UART_TX(RS485uart))) {
-        INTClearFlag(INT_SOURCE_UART_TX(RS485uart));
-    }
-}
 
 
 /******************************************************************************
@@ -858,3 +851,72 @@ static unsigned long i = 0;
     if (INTGetFlag(INT_SOURCE_UART_TX(HOSTuart))) 
         INTClearFlag(INT_SOURCE_UART_TX(HOSTuart));            
 }
+
+// handler for the DMA channel 1 interrupt
+void __ISR(_DMA0_VECTOR, IPL5SOFT) DmaHandler0(void)
+{
+    int i, j;
+    unsigned char ch;
+	int	evFlags;				// event flags when getting the interrupt
+
+	INTClearFlag(INT_SOURCE_DMA(DMA_CHANNEL0));	// release the interrupt in the INT controller, we're servicing int
+
+	evFlags=DmaChnGetEvFlags(DMA_CHANNEL0);	// get the event flags
+
+    if(evFlags&DMA_EV_BLOCK_DONE)
+    { // just a sanity check. we enabled just the DMA_EV_BLOCK_DONE transfer done interrupt
+        i = 0; j = 0;
+        do {
+            ch = RS485RxBuffer[i]; 
+            RS485RxBuffer[i] = 0x00;
+            if (ch != 0 && ch != '\n')
+                RS485RxBufferCopy[j++] = ch;
+            i++;
+        } while (i < MAXBUFFER && j < MAXBUFFER && ch != '\r');
+        RS485RxBufferFull = true;
+        DmaChnClrEvFlags(DMA_CHANNEL0, DMA_EV_BLOCK_DONE);       
+        DmaChnEnable(DMA_CHANNEL0);
+    }
+}
+
+
+/*
+// RS485 UART interrupt handler it is set at priority level 2
+void __ISR(RS485_VECTOR, ipl2) IntRS485UartHandler(void) {
+    unsigned char ch;
+    static unsigned short RS485RxIndex = 0;
+
+    if (RS485bits.OERR || RS485bits.FERR) {
+        if (UARTReceivedDataIsAvailable(RS485uart))
+            ch = UARTGetDataByte(RS485uart);
+        RS485bits.OERR = 0;
+        RS485RxIndex = 0;
+    } else if (INTGetFlag(INT_SOURCE_UART_RX(RS485uart))) {
+        INTClearFlag(INT_SOURCE_UART_RX(RS485uart));
+        if (UARTReceivedDataIsAvailable(RS485uart)) {
+            ch = UARTGetDataByte(RS485uart);
+            {
+                if (ch == LF || ch == 0);
+                else if (ch == CR) 
+                {
+                    if (RS485RxIndex < (MAXBUFFER-1)) 
+                    {
+                        RS485RxBuffer[RS485RxIndex] = CR;
+                        RS485RxBuffer[RS485RxIndex + 1] = '\0'; 
+                        RS485RxBufferFull = true;
+                    }
+                    RS485RxIndex = 0;
+                }                
+                else 
+                {
+                    if (RS485RxIndex < (MAXBUFFER-1))
+                        RS485RxBuffer[RS485RxIndex++] = ch;                    
+                }
+            }
+        }
+    }
+    if (INTGetFlag(INT_SOURCE_UART_TX(RS485uart))) {
+        INTClearFlag(INT_SOURCE_UART_TX(RS485uart));
+    }
+}
+*/ 
