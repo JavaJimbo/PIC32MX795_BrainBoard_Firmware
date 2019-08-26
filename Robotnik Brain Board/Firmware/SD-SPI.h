@@ -15,8 +15,8 @@
  * Software License Agreement
  *
  * The software supplied herewith by Microchip Technology Incorporated
- * (the "Company") for its PICmicro® Microcontroller is intended and
- * supplied to you, the Company’s customer, for use solely and
+ * (the "Company") for its PICmicroï¿½ Microcontroller is intended and
+ * supplied to you, the Companyï¿½s customer, for use solely and
  * exclusively on Microchip PICmicro Microcontroller products. The
  * software is owned by the Company and/or its supplier, and is
  * protected under applicable copyright laws. All rights are reserved.
@@ -40,6 +40,7 @@
 #include "GenericTypeDefs.h"
 #include "FSconfig.h"
 #include "FSDefs.h"
+
 
 
 #ifdef __18CXX

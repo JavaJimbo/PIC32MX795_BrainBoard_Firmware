@@ -2017,8 +2017,8 @@ void OpenSPIM( unsigned int sync_mode)
         #else
             SPIBRG = SPICalutateBRG(GetPeripheralClock(), SPI_FREQUENCY);
         #endif
-        SPICONbits.CKP = 1;
-        SPICONbits.CKE = 0;
+        SPICON1bits.CKP = 1;
+        SPICON1bits.CKE = 0;
     #elif defined __C30__ //must be PIC24 or dsPIC device
         SPICON = 0x0000;              // power on state
         SPICON |= sync_mode;          // select serial mode 

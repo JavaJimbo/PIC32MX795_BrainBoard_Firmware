@@ -4,18 +4,23 @@
  *
  * Created on December 15, 2014, 12:50 PM
  * 8-5-18 JBS: Updated to work for SNAD PIC or UBW32 boards.
+ * 8-5-19 Replaced SPICON1 with SPICON
  */
 
 #ifndef DEFS_H
 #define	DEFS_H
 
 #define USE_UBW32
+#define SPI_CHANNEL 2
+
+#define FALSE 0
+#define TRUE !FALSE
+#define false FALSE
+#define true TRUE
 
 #define	STX '>'
 #define	DLE '/'
 #define	ETX '\r'
-
-
 
 typedef union
 {
@@ -23,10 +28,9 @@ typedef union
 	unsigned short integer;
 } MConvertType;
 
-#define MAX_SERVOS 256
+#define MAX_SERVOS 64
 
 /*
-
 #define NUMPOTS 4
 
 #define HOSTuart UART2
@@ -67,10 +71,11 @@ typedef union
 #define RS485_CTRL PORTGbits.RG0
 */
 
+/*
 #ifdef USE_UBW32
     // Description: SD-SPI Chip Select and TRIS bits
-    #define SD_CS               LATCbits.LATC4 
-    #define SD_CS_TRIS          TRISCbits.TRISC4 
+    #define SD_CS               LATEbits.LATE4 // $$$$
+    #define SD_CS_TRIS          TRISEbits.TRISE4 
     // Description: SD-SPI Card Detect and TRIS bits
     #define SD_CD               PORTGbits.RG9 
     #define SD_CD_TRIS          TRISGbits.TRISG9 
@@ -87,14 +92,14 @@ typedef union
     // Description: SD-SPI Write Protect - doesn't exist on SNAD PIC, 0 = NO write protect
     #define SD_WE 0
 #endif
+*/
 
-
+/*
         // Registers for the SPI module you want to use
         //#define MDD_USE_SPI_1  $$$$
         #define MDD_USE_SPI_2
         #define USE_SD_INTERFACE_WITH_SPI
 
-        #define SPI_CHANNEL 2
 
 		//SPI Configuration
 		#define SPI_START_CFG_1     (PRI_PRESCAL_64_1 | SEC_PRESCAL_8_1 | MASTER_ENABLE_ON | SPI_CKE_ON | SPI_SMP_ON)
@@ -105,7 +110,7 @@ typedef union
 
 
             // Description: The main SPI control register
-            #define SPICON1             SPI2CON
+            #define SPICON             SPI2CON
             // Description: The SPI status register
             #define SPISTAT             SPI2STAT
             // Description: The SPI Buffer
@@ -113,7 +118,7 @@ typedef union
             // Description: The receive buffer full bit in the SPI status register
             #define SPISTAT_RBF         SPI2STATbits.SPIRBF
             // Description: The bitwise define for the SPI control register (i.e. _____bits)
-            #define SPICON1bits         SPI2CONbits
+            #define SPICONbits         SPI2CONbits
             // Description: The bitwise define for the SPI status register (i.e. _____bits)
             #define SPISTATbits         SPI2STATbits
             // Description: The enable bit for the SPI module
@@ -133,7 +138,9 @@ typedef union
             #define putcSPI             putcSPI2
             #define getcSPI             getcSPI2
             #define OpenSPI(config1, config2)   OpenSPI2(config1, config2)
-
+*/
+  
+  
 /*
         #define USE_SD_INTERFACE_WITH_SPI
         #define MDD_USE_SPI_2
@@ -161,7 +168,7 @@ typedef union
             #define SD_WE_TRIS          TRISAbits.TRISA0 // TRISGbits.TRISG1
 
             // Description: The main SPI control register
-            #define SPICON1             SPI2CON
+            #define SPICON             SPI2CON
             // Description: The SPI status register
             #define SPISTAT             SPI2STAT
             // Description: The SPI Buffer
@@ -169,7 +176,7 @@ typedef union
             // Description: The receive buffer full bit in the SPI status register
             #define SPISTAT_RBF         SPI2STATbits.SPIRBF
             // Description: The bitwise define for the SPI control register (i.e. _____bits)
-            #define SPICON1bits         SPI2CONbits
+            #define SPICONbits         SPI2CONbits
             // Description: The bitwise define for the SPI status register (i.e. _____bits)
             #define SPISTATbits         SPI2STATbits
             // Description: The enable bit for the SPI module

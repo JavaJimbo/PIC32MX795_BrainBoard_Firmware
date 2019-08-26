@@ -15,6 +15,7 @@
  * Adapted I2C routines from Super Copter on Electro Tech Online: https://www.electro-tech-online.com/threads/pic32-c32-cant-read-i2c-bus.145272/
  * 8-15-19: Recompiled. Added files for Adafruit PCA9685 servo controller. Works great with pot input using PIC I2C3 port.
  * 8-23-19: DMA for RX: got rid of bugs - works great at 921600 baud
+ * 8-26-19: Works receiving 100 servos @ 921600 baud.
  ***********************************************************************************/
 #include <xc.h>
 #include "HardwareProfile.h"
@@ -33,6 +34,8 @@
 #include "FSIO.h"
 #include "Delay.h"
 #include "Defs.h"
+#include "SD-SPI.h"
+
 
 /** CONFIGURATION **************************************************/
 #pragma config UPLLEN   = ON        // USB PLL Enabled
@@ -56,6 +59,8 @@
 
 /** I N C L U D E S **********************************************************/
 
+#define false FALSE
+#define true TRUE
 
 #define PUSHBUTTON_IN LATGbits.LATG15
 
@@ -103,8 +108,10 @@
 #define UP_ARROW 65
 #define DOWN_ARROW 66
 
+/*
 #define false FALSE
 #define true TRUE
+*/
 /** V A R I A B L E S ********************************************************/
 // #define MAXBUFFER CDC_DATA_IN_EP_SIZE
 #define MAXBUFFER 255
@@ -118,6 +125,9 @@ unsigned char RS485RxBufferFull = false;
 unsigned char RS485TxBufferFull = false;
 unsigned char RS485RxBuffer[MAXBUFFER+1];
 unsigned char RS485RxBufferCopy[MAXBUFFER+1];
+unsigned char ServoData[MAXBUFFER+1];
+short servoPositions[MAX_SERVOS];
+
 
 unsigned char outMessage[] = "\rJust putzing around";
 long ActualRS485BaudRate = 0;
@@ -133,6 +143,12 @@ void UserInit(void);
 void InitializeUSART(void);
 void putcUSART(char c);
 unsigned char getcUSART();
+extern unsigned char CheckCRC (unsigned char *ptrRxModbus, short RxModbusLength);
+unsigned short decodePacket(unsigned char *ptrInPacket, unsigned char *ptrData);
+void PrintServoData(short numServos, short *ptrServoPositions, unsigned char command, unsigned char subCommand);
+unsigned char processPacketData(short packetDataLength, unsigned char *ptrPacketData, short *numServos, short *ptrServoPositions, unsigned char *command, unsigned char *subCommand);
+unsigned char SendReceiveSPI(unsigned char dataOut);
+
 
 //unsigned char command = 0;
 //unsigned char mode = 0;
@@ -163,7 +179,7 @@ unsigned short ADresult[MAXPOTS];
 unsigned short PortBRead = 0;
 unsigned char PortBflag = false;
 
-unsigned char ReadHBridgeData(unsigned char NumberOfDevices, unsigned char *ptrData);
+unsigned char ReadHBridgeData(unsigned char *ptrData);
 void initHBridgeSPI(void);
 unsigned char ADready = false;
 
@@ -177,62 +193,165 @@ void ClearCopyBuffer()
     }
 }
 
+
+unsigned char processPacketData(short packetDataLength, unsigned char *ptrPacketData, short *numServos, short *ptrServoPositions, unsigned char *command, unsigned char *subCommand)
+{
+    MConvertType servoValue;    
+    short j, i = 0;  
+    
+    if (!CheckCRC(ptrPacketData, packetDataLength)) return false;    
+    *command = ptrPacketData[i++];
+    *subCommand = ptrPacketData[i++];
+    *numServos = ptrPacketData[i++];
+    
+    
+    if (*numServos > MAX_SERVOS) return false;
+    j = 0;
+    while(j < *numServos)
+    {
+        servoValue.b[0] = ptrPacketData[i++];
+        servoValue.b[1] = ptrPacketData[i++];
+        ptrServoPositions[j++] = servoValue.integer;
+    }
+    return true;
+}
+
+void PrintServoData(short numServos, short *ptrServoPositions, unsigned char command, unsigned char subCommand)
+{
+    int i;
+    printf("\rOK! Com: %d, Sub: %d, servos %d: ", command, subCommand, numServos);
+    for (i = 0; i < 10; i++) printf("%d, ", ptrServoPositions[i]);
+}
+
+unsigned char ReadHBridgeData(unsigned char *ptrData)
+{
+    unsigned char dataOut = 0;
+    
+    PWM_SPI_CS = 0;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[0] = dataOut;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[1] = dataOut;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[2] = dataOut;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[3] = dataOut;
+    PWM_SPI_CS = 1;
+    
+    return 0;
+}
+
+
 int main(void)
 {   
 unsigned short i = 0, j = 0, numBytes;
 FSFILE *filePtr;
-char filename[] = "TestFile.txt";
-char MessageOut[] = "\rDrink up Shriners!";
+char filename[] = "NextFile.txt";
+char MessageOut[] = "\r\nThis is only going to add to the hilarity.";
 unsigned char ch;    
 short length = 0;
 short counter = 0;
 int PushButtonState = 0, PreviousPush = 0;
 int loopCounter = 0;
 unsigned char arrData[4];
-unsigned char arrI2C1Test[128] = "TAKE #1: Testing I2C1 Reads and Writes";
+unsigned char arrI2C1Test[128] = "You can do the do but not if I was U.";
 unsigned char arrI2C3Test[128] = "Take #2: Testing I2C3 Yadda yadda yadda";
 unsigned char dataByte = 0;
 short servoPos;
 unsigned char arrI2CTestIn[128];
+short dataLength = 0;
+short packetDataLength;
+unsigned char PacketData[MAXBUFFER];
+short numServos;
+short ServoPositions[MAX_SERVOS];
+unsigned char command, subCommand;
+unsigned short EEaddress = 1234;
+unsigned short SPIcounter = 0;
 
+MConvertType convert;
 
     InitializeSystem();
-    printf("\r\rTesting RS485 Receiving DMA #1 @ %d baud\r", ActualRS485BaudRate);
     
+    SD_CS = 1;
+    PWM_SPI_CS = 1;   
+    
+    /*
+    DelayMs(100);    
+    printf("\rTesting SD_CS HIGH - wait for Media Detect...");
+    while (!MDD_MediaDetect());     // Wait for SD detect to go low    
+    printf("\rInitializing SD card...");
+    while (!FSInit());        
+    
+    printf("\rOpening test file %s to write...", filename);
+    filePtr = FSfopen(filename, FS_WRITE);        
+    if (filePtr==NULL) printf("Error: could not open %s", filename);
+    else
+    {
+        printf("\rSuccess! Opened %s. writing data\r", filename);    
+        length = strlen(MessageOut);
+        numBytes = FSfwrite(MessageOut, 1, length, filePtr);
+        printf("\rLength of message: %d, bytes written: %d", length, numBytes);
+        printf("\rClosing file");
+        FSfclose(filePtr); 
+    }   
+    
+    printf("\rOpening test file to read...");
+    filePtr = FSfopen(filename, FS_READ);
+    if (filePtr==NULL) printf("Error: could not open %s", filename);
+    else
+    {
+        printf("\rSuccess! Opened %s. Reading data\r\r", filename);    
+        do {                      
+            numBytes = FSfread(&ch, 1, 1, filePtr);
+            putchar(ch); 
+        } while (!FSfeof(filePtr)); 
+        printf("\rEND OF FILE");
+        printf("\rClosing file");
+        FSfclose(filePtr); 
+    }   
+    DelayMs(10);       
+
+    
+    
+    DelayMs(400);
+    
+    printf("\r\rTESTING EEPROM");    
+    initI2C(I2C1);           
+    length = strlen(arrI2C1Test);
+    DelayMs(100);
+    printf("\rWriting I2C1 block: %d bytes @ %d", length, EEaddress);
+    EepromWriteBlock(I2C1, EEPROM_ADDRESS, EEaddress, arrI2C1Test, length);
+    printf ("Read byte: %d", (int) dataByte);
+    DelayMs(100);    
+    printf("\rReading I2C1 block");
+    EepromReadBlock (I2C1, EEPROM_ADDRESS, EEaddress, arrI2CTestIn, length);    
+    arrI2CTestIn[length] = '\0';
+    printf("\rRead Data In: %s", arrI2CTestIn);   
+    printf("\rDONE");
+    */
+    
+    DelayMs(100);
+
+    /*
+    printf("\r\rTesting SPI", ActualRS485BaudRate);
+    initHBridgeSPI();
+    printf("\rBridge SPI initialized");
+    PWM_DISABLE = 0;
+    */
+    printf("\rTesting CRC etc.");
     while(1)
     {
         if (RS485RxBufferFull)
         {
             RS485RxBufferFull = false;
-            printf("RX DMA: %s", RS485RxBufferCopy);     
+            dataLength =  decodePacket(RS485RxBufferCopy, PacketData);            
+            if (!processPacketData(dataLength, PacketData, &numServos, ServoPositions, &command, &subCommand)) 
+                printf("\rCRC ERROR");
+            else PrintServoData(numServos, ServoPositions, command, subCommand);                                    
             ClearCopyBuffer();
         }
-        DelayMs(1);
     }
     
-    printf("\r\rTESTING PCA AND EEPROM");    
-    initI2C(I2C1);
-       
-    
-    SD_CS = 1;
-    PWM_SPI_CS = 1;
-    
-    DelayMs(400);
-    
-    length = strlen(arrI2C1Test);
-    DelayMs(100);
-    printf("\rWriting I2C1 block: %d bytes", length);
-    EepromWriteBlock(I2C1, EEPROM_ADDRESS, 0x0000, arrI2C1Test, length);
-    printf ("Read byte: %d", (int) dataByte);
-    DelayMs(100);    
-    printf("\rReading I2C1 block");
-    EepromReadBlock (I2C1, EEPROM_ADDRESS, 0x0000, arrI2CTestIn, length);    
-    arrI2CTestIn[length] = '\0';
-    printf("\rRead Data In: %s", arrI2CTestIn);   
-    printf("\rDONE");
-    
-    
-    DelayMs(100);
     printf("\r\rFeather Servo NO USB version");
     printf("\rInitializing Feather Servo Board at address 0x80: ");
     #define PCA9685_ADDRESS 0x80 // Basic default address for Adafruit Feather Servo Board 
@@ -305,41 +424,6 @@ unsigned char arrI2CTestIn[128];
         // printf("\r#%d: Data = %02X, %02X, %02X, %02X", loopCounter++, (int)arrData[0], (int)arrData[1], (int)arrData[2], (int)arrData[3]);        
     }
     
-    DelayMs(100);    
-    printf("\rTesting SD_CS HIGH - wait for Media Detect...");
-    while (!MDD_MediaDetect());     // Wait for SD detect to go low    
-    printf("\rInitializing SD card...");
-    while (!FSInit());
-    printf("\rOpening test file to read...");
-    filePtr = FSfopen(filename, FS_READ);
-    if (filePtr==NULL) printf("Error: could not open %s", filename);
-    else
-    {
-        printf("\rSuccess! Opened %s. Reading data\r\r", filename);    
-        do {                      
-            numBytes = FSfread(&ch, 1, 1, filePtr);
-            putchar(ch); 
-        } while (!FSfeof(filePtr)); 
-        printf("\rEND OF FILE");
-        printf("\rClosing file");
-        FSfclose(filePtr); 
-    }   
-    DelayMs(10);        // Initialize SD card       
-
-    printf("\rOpening test file to write:");
-    filePtr = FSfopen(filename, FS_APPEND);    
-    
-    
-    if (filePtr==NULL) printf("Error: could not open %s", filename);
-    else
-    {
-        printf("\rSuccess! Opened %s. writing data\r", filename);    
-        length = strlen(MessageOut);
-        numBytes = FSfwrite(MessageOut, 1, length, filePtr);
-        printf("\rLength of message: %d, bytes written: %d", length, numBytes);
-        printf("\rClosing file");
-        FSfclose(filePtr); 
-    }   
     
     printf("\r\rTesting Interrupt on change:");
     while(1)
@@ -785,24 +869,6 @@ void initHBridgeSPI(void)
     */
 }
 
-unsigned char ReadHBridgeData(unsigned char NumberOfDevices, unsigned char *ptrData)
-{
-    unsigned char dataOut = 0;
-    int i = 0;
-    //for (i = 0; i < 4; i++)
-    {
-        dataOut = SendReceiveSPI(0b00000000);
-        ptrData[0] = dataOut;
-        dataOut = SendReceiveSPI(0b00000000);
-        ptrData[1] = dataOut;
-        dataOut = SendReceiveSPI(0b00000000);
-        ptrData[2] = dataOut;
-        dataOut = SendReceiveSPI(0b00000000);
-        ptrData[3] = dataOut;
-        
-    }
-    return 0;
-}
 
 #define ESC 27
 #define CR 13
@@ -869,15 +935,60 @@ void __ISR(_DMA0_VECTOR, IPL5SOFT) DmaHandler0(void)
         do {
             ch = RS485RxBuffer[i]; 
             RS485RxBuffer[i] = 0x00;
-            if (ch != 0 && ch != '\n')
-                RS485RxBufferCopy[j++] = ch;
+            RS485RxBufferCopy[i] = ch;
             i++;
-        } while (i < MAXBUFFER && j < MAXBUFFER && ch != '\r');
+        } while (i < MAXBUFFER && ch != ETX);
         RS485RxBufferFull = true;
         DmaChnClrEvFlags(DMA_CHANNEL0, DMA_EV_BLOCK_DONE);       
         DmaChnEnable(DMA_CHANNEL0);
     }
 }
+
+
+unsigned short decodePacket(unsigned char *ptrInPacket, unsigned char *ptrData)
+{
+    unsigned short i, j;
+    unsigned char escapeFlag = FALSE;
+    unsigned char startFlag = false;
+    unsigned char ch;
+
+    j = 0;
+    for (i = 0; i < MAXBUFFER; i++) 
+    {
+        ch = ptrInPacket[i];
+        // Escape flag not active
+        if (!escapeFlag) 
+        {
+            if (ch == STX) 
+            {
+                if (!startFlag) 
+                {
+                    startFlag = true;
+                    j = 0;
+                }
+                else return (0);
+            } 
+            else if (ch == ETX) 
+                return (j);
+            else if (ch == DLE)
+                escapeFlag = TRUE;
+            else if (j < MAXBUFFER)
+                ptrData[j++] = ch;
+            else return (0);
+        } 
+        // Escape flag active
+        else 
+        {
+            escapeFlag = FALSE;
+            if (ch == ETX-1) ch = ETX;            
+            if (j < MAXBUFFER)
+                ptrData[j++] = ch;
+            else return(0);
+        }
+    }
+    return (j);
+}
+
 
 
 /*
