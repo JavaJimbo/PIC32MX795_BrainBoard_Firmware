@@ -9,12 +9,47 @@
 #ifndef DEFS_H
 #define	DEFS_H
 
-#define USE_UBW32
+// #define USE_UBW32
+#define USE_BRAIN_BOARD
+#define SUCCESS 0
+
+// #define TEST_OUT LATGbits.LATG9
 
 #define	STX '>'
 #define	DLE '/'
 #define	ETX '\r'
 
+#define MAXSERVOS 64  // Was 256
+#define NUMMOTORS 4
+#define PWM1 OC2RS
+#define PWM2 OC3RS
+#define PWM3 OC4RS
+#define PWM4 OC5RS
+
+#define FORWARD 0
+#define REVERSE 1
+#define MAXSUM 600000
+#define PWM_MAX 3000
+
+
+#define FILTERSIZE 400
+struct PIDtype
+{
+    short error[FILTERSIZE];
+    long sumError;    
+    float kP;
+    float kI;
+    float kD;
+    unsigned long PWMoffset;
+    long PWMvalue;
+    long PreviousPWMvalue;
+    long Rollovers;
+    long ADActual;
+    long ADPrevious;
+    long ADCommand;
+    long previousError;
+    unsigned char reset;    
+} PID[NUMMOTORS];
 
 
 typedef union
@@ -23,54 +58,12 @@ typedef union
 	unsigned short integer;
 } MConvertType;
 
-#define MAX_SERVOS 256
-
-/*
-
-#define NUMPOTS 4
-
-#define HOSTuart UART2
-#define HOSTbits U2STAbits
-#define XBEEuart UART4
-#define XBEEbits U4STAbits
-#define XBEE_VECTOR _UART_4_VECTOR
-#define HOST_VECTOR _UART_2_VECTOR
 
 
-#define RS485uart UART5
-
-#define XBEE_SLEEP PORTBbits.RB15
-#define TEST_OUT PORTBbits.RB0
-#define TRIG_OUT PORTBbits.RB1
-
-#define TRIG_HI PORTSetBits(IOPORT_B, BIT_1)
-#define TRIG_LOW PORTClearBits(IOPORT_B, BIT_1)
-
-#define XBEE_SLEEP_ON PORTSetBits(IOPORT_B, BIT_0)
-#define XBEE_SLEEP_OFF PORTClearBits(IOPORT_B, BIT_0)
-
-#define TEST_HI PORTSetBits(IOPORT_B, BIT_0)
-#define TEST_LOW PORTClearBits(IOPORT_B, BIT_0)
-
-
-#define START 1
-
-#define MAXBUFFER 256 // 512
-#define MAXHOSTBUFFER 128
-
-#define XBEE_SLEEP PORTBbits.RB15
-
-#define MAXRANDOM (RAND_MAX+1)
-#define true	TRUE
-#define false 	FALSE
-
-#define RS485_CTRL PORTGbits.RG0
-*/
-
-#ifdef USE_UBW32
+#ifdef USE_BRAIN_BOARD
     // Description: SD-SPI Chip Select and TRIS bits
-    #define SD_CS               LATCbits.LATC4 
-    #define SD_CS_TRIS          TRISCbits.TRISC4 
+    #define SD_CS               LATEbits.LATE4 
+    #define SD_CS_TRIS          TRISEbits.TRISE4 
     // Description: SD-SPI Card Detect and TRIS bits
     #define SD_CD               PORTGbits.RG9 
     #define SD_CD_TRIS          TRISGbits.TRISG9 

@@ -9,7 +9,7 @@
 #ifndef I2C_4BUS_EEPROM_PIC32_H
 #define	I2C_4BUS_EEPROM_PIC32_H
 
-#define TEST_OUT LATEbits.LATE3
+// #define TEST_OUT LATEbits.LATE3
 #define EEPROM_ADDRESS 0xA0
 #define EEPROM_WP PORTDbits.RD8
 

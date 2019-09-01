@@ -12,14 +12,10 @@
  * 8-9-19: Testing PWM with ADC inputs. Everything works!
  * 8-11-19: Got I2C EEprom working.
  * 8-13-19 Substituted C:\Program Files (x86)\Microchip\xc32\v1.30\pic32-libs\include\lega-c\peripheral
- * Adapted I2C routines from Super Copter on Electro Tech Online: 
- *  https://www.electro-tech-online.com/threads/pic32-c32-cant-read-i2c-bus.145272/
+ * Adapted I2C routines from Super Copter on Electro Tech Online: https://www.electro-tech-online.com/threads/pic32-c32-cant-read-i2c-bus.145272/
  * 8-15-19: Recompiled. Added files for Adafruit PCA9685 servo controller. Works great with pot input using PIC I2C3 port.
  * 8-23-19: DMA for RX: got rid of bugs - works great at 921600 baud
  * 8-26-19: Works receiving 100 servos @ 921600 baud.
- * 8-31-19: Servo loop works great, also added SPI with SD card and H Bridge.
- * 9-1-19:  Works with USB_Robotnik and VC++ Robotnik Controller recording/playing four servo motors.
- * 
  ***********************************************************************************/
 #include <xc.h>
 #include "HardwareProfile.h"
@@ -86,7 +82,9 @@
 
 #define PWM_DISABLE LATFbits.LATF1
 #define PWM_SPI_CS LATDbits.LATD7
-#define LED LATEbits.LATE6
+
+#define TEST_OUT LATEbits.LATE3
+#define LED_OUT LATEbits.LATE6
 
 #define RS485_Control LATBbits.LATB0
 
@@ -110,28 +108,34 @@
 #define UP_ARROW 65
 #define DOWN_ARROW 66
 
+/*
+#define false FALSE
+#define true TRUE
+*/
 /** V A R I A B L E S ********************************************************/
 // #define MAXBUFFER CDC_DATA_IN_EP_SIZE
 #define MAXBUFFER 255
 unsigned char HOSTRxBuffer[MAXBUFFER+1];
 unsigned char HOSTRxBufferFull = false;
-unsigned char HOSTTxBuffer[MAXBUFFER+1]; 
-unsigned char MEMORYBuffer[MAXBUFFER+1]; 
-unsigned char displayFlag = false;
-unsigned char displayPWMFlag = false;
+unsigned char HOSTTxBuffer[MAXBUFFER+1];
+
+//unsigned char MemoryBufferFull = false;
 
 unsigned char RS485RxBufferFull = false;
 unsigned char RS485TxBufferFull = false;
 unsigned char RS485RxBuffer[MAXBUFFER+1];
 unsigned char RS485RxBufferCopy[MAXBUFFER+1];
 unsigned char ServoData[MAXBUFFER+1];
-short servoPositions[MAXSERVOS];
+short servoPositions[MAX_SERVOS];
+
 
 unsigned char outMessage[] = "\rJust putzing around";
 long ActualRS485BaudRate = 0;
 
-/** P R I V A T E  P R O T O T Y P E S ***************************************/
+// short MIDItimeout = 0;
 
+
+/** P R I V A T E  P R O T O T Y P E S ***************************************/
 static void InitializeSystem(void);
 void YourHighPriorityISRCode();
 void YourLowPriorityISRCode();
@@ -144,13 +148,15 @@ unsigned short decodePacket(unsigned char *ptrInPacket, unsigned char *ptrData);
 void PrintServoData(short numServos, short *ptrServoPositions, unsigned char command, unsigned char subCommand);
 unsigned char processPacketData(short packetDataLength, unsigned char *ptrPacketData, short *numServos, short *ptrServoPositions, unsigned char *command, unsigned char *subCommand);
 unsigned char SendReceiveSPI(unsigned char dataOut);
-void ResetPID();
-long PIDcontrol(long servoID, struct PIDtype *PID);
-unsigned char ReadHBridgeData(unsigned char *ptrData);
-void initHBridgeSPI(void);
-unsigned char ADready = false;
+
+
+//unsigned char command = 0;
+//unsigned char mode = 0;
+//unsigned short PortBRead = 0x0000;
+//unsigned char PortBflag = false;
+unsigned char SendFlag = false;
 unsigned char EnableAD = false;
-unsigned char DATABufferFull = false;
+
 void ConfigAd(void);
 
 enum
@@ -167,12 +173,15 @@ short time, seconds = 0, minutes = 0, hundredths = 0;
 
 unsigned char TestMode = false;
 
-#define MAXPOTS 8
+#define MAXPOTS 4
 unsigned short ADresult[MAXPOTS];
 
 unsigned short PortBRead = 0;
 unsigned char PortBflag = false;
 
+unsigned char ReadHBridgeData(unsigned char *ptrData);
+void initHBridgeSPI(void);
+unsigned char ADready = false;
 
 void ClearCopyBuffer()
 {
@@ -196,7 +205,7 @@ unsigned char processPacketData(short packetDataLength, unsigned char *ptrPacket
     *numServos = ptrPacketData[i++];
     
     
-    if (*numServos > MAXSERVOS) return false;
+    if (*numServos > MAX_SERVOS) return false;
     j = 0;
     while(j < *numServos)
     {
@@ -206,6 +215,14 @@ unsigned char processPacketData(short packetDataLength, unsigned char *ptrPacket
     }
     return true;
 }
+
+void PrintServoData(short numServos, short *ptrServoPositions, unsigned char command, unsigned char subCommand)
+{
+    int i;
+    printf("\rOK! Com: %d, Sub: %d, servos %d: ", command, subCommand, numServos);
+    for (i = 0; i < 10; i++) printf("%d, ", ptrServoPositions[i]);
+}
+
 unsigned char ReadHBridgeData(unsigned char *ptrData)
 {
     unsigned char dataOut = 0;
@@ -224,134 +241,105 @@ unsigned char ReadHBridgeData(unsigned char *ptrData)
     return 0;
 }
 
-#define MAXNUM 16
-unsigned char NUMbuffer[MAXNUM + 1];
-unsigned char KPbuffer[MAXNUM + 1];
-unsigned char KIbuffer[MAXNUM + 1];
-unsigned char KDbuffer[MAXNUM + 1];
 
-void makeFloatString(float InValue, int numDecimalPlaces, unsigned char *arrAscii)
-{
-    int i = 0, j = 0;        
-    float floValue = InValue;
-    unsigned char digit;
+int main(void)
+{   
+unsigned short i = 0, j = 0, numBytes;
+FSFILE *filePtr;
+char filename[] = "NextFile.txt";
+char MessageOut[] = "\r\nI'll not have any beer in my dormitory";
+unsigned char ch;    
+short length = 0;
+short counter = 0;
+int PushButtonState = 0, PreviousPush = 0;
+int loopCounter = 0;
+unsigned char arrData[4];
+unsigned char arrI2C1Test[128] = "You can do the do but not if I was U.";
+unsigned char arrI2C3Test[128] = "Take #2: Testing I2C3 Yadda yadda yadda";
+unsigned char dataByte = 0;
+short servoPos;
+unsigned char arrI2CTestIn[128];
+short dataLength = 0;
+short packetDataLength;
+unsigned char PacketData[MAXBUFFER];
+short numServos;
+short ServoPositions[MAX_SERVOS];
+unsigned char command, subCommand;
+unsigned short EEaddress = 1234;
+unsigned short SPIcounter = 0;
+
+MConvertType convert;
+
+    InitializeSystem();
     
-    if (floValue < 0)
-    {
-        floValue = 0 - floValue;
-        arrAscii[j++] = '-';
-    }
-    while (floValue >= 1)
-    {
-        floValue = floValue / 10.0;
-        i++;
-    }
-    if (i == 0) 
-    {
-        arrAscii[j++] = '0';
-        arrAscii[j++] = '.';
-    }
-    else
-    {
-        while (i > 0)
-        {
-            floValue = floValue * 10;
-            digit = (unsigned char)floValue;
-            arrAscii[j++] = digit + '0';
-            floValue = floValue - (float) digit;
-            i--;
-        }
-        arrAscii[j++] = '.';
-    }
-    if (numDecimalPlaces > 0)
-    {        
-        i = numDecimalPlaces;
-        while (i > 0)
-        {  
-            floValue = floValue * 10;
-            digit = (unsigned char)floValue;
-            arrAscii[j++] = digit + '0';
-            floValue = floValue - (float) digit;
-            i--;                         
-        }
-    }
-    else arrAscii[j++] = '0';
-    arrAscii[j++] = '\0';
-}
-
-
-void ResetPID()
-{
-    int i, j;
-    for (i = 0; i < NUMMOTORS; i++)
-    {
-        PID[i].sumError = 0;        
-        PID[i].kP = 25.0;
-        PID[i].kI = 0.020;
-        PID[i].kD = 4.0;
-        PID[i].PWMoffset = 220; // 100;
-        PID[i].PreviousPWMvalue = PID[i].PWMvalue = 0;
-        PID[i].Rollovers = 0;                
-        PID[i].ADActual = 0;
-        PID[i].ADPrevious = 0;
-        PID[i].ADCommand = 0;
-        PID[i].reset = true;
-        PID[i].previousError = 0;
-        for (j = 0; j < FILTERSIZE; j++) PID[i].error[j] = 0;
-    }
-}
-
-void PrintServoData(short numServos, short *ptrServoPositions, unsigned char command, unsigned char subCommand)
-{
-    int i;
-    printf("\rOK! Com: %d, Sub: %d, servos %d: ", command, subCommand, numServos);
-    for (i = 0; i < 10; i++) printf("%d, ", ptrServoPositions[i]);
-}
-
-
-unsigned char intFlag = false;
-unsigned char memoryFlag = false;
-
-int main(void) 
-{
-    unsigned char i = 0, p = 0, q = 0;        
-    long PWMvalue = 0;    
-    unsigned char command, subCommand, ch;
-    unsigned char runMode = true;
-    unsigned char useExternalPots = true;
-    int JogPWM = 0;
-    float floValue;            
-    unsigned char dataCommand = 0, dataSubCommand = 0;
-    unsigned char HBridgeData[4];
-    short LEDcounter = 0;
-    FSFILE *filePtr;
-    char filename[] = "NextFile.txt";
-    char MessageOut[] = "\r\nI'll not have any beer in my dormitory";
-    short length = 0;
-    unsigned short numBytes;
-    long memoryOffset = 0, previousOffset = 0;
-    short dataLength = 0;
-    MConvertType convert;
-    unsigned char PacketData[MAXBUFFER];
-    short numServos;
-    short ServoPositions[MAXSERVOS] = {512,512,512,512};
-        
-    PWM1 = PWM2 = PWM3 = PWM4 = 0;
-    ResetPID();
-    
-    DelayMs(200);
-    InitializeSystem();  
-
     SD_CS = 1;
-    PWM_SPI_CS = 1;   
+    PWM_SPI_CS = 1;       
     
     DelayMs(100);    
-    printf("\rTesting SPI and RS485 DMA. RUN mode enabled...");
+    printf("\rTesting SD_CS HIGH - wait for Media Detect...");
+    while (!MDD_MediaDetect());     // Wait for SD detect to go low    
+    printf("\rInitializing SD card...");
+    while (!FSInit());        
+    
+    printf("\rOpening test file %s to write...", filename);
+    filePtr = FSfopen(filename, FS_APPEND);        
+    if (filePtr==NULL) printf("Error: could not open %s", filename);
+    else
+    {
+        printf("\rSuccess! Opened %s. writing data\r", filename);    
+        length = strlen(MessageOut);
+        numBytes = FSfwrite(MessageOut, 1, length, filePtr);
+        printf("\rLength of message: %d, bytes written: %d", length, numBytes);
+        printf("\rClosing file");
+        FSfclose(filePtr); 
+    }   
+    
+    printf("\rOpening test file to read...");
+    filePtr = FSfopen(filename, FS_READ);
+    if (filePtr==NULL) printf("Error: could not open %s", filename);
+    else
+    {
+        printf("\rSuccess! Opened %s. Reading data\r\r", filename);    
+        do {                      
+            numBytes = FSfread(&ch, 1, 1, filePtr);
+            putchar(ch); 
+        } while (!FSfeof(filePtr)); 
+        printf("\rEND OF FILE");
+        printf("\rClosing file");
+        FSfclose(filePtr); 
+    }   
+    DelayMs(10);       
 
-    // printf("\r\rTwo Motor Controller Board Rev 2.0\rStore on GitHub 6-3-19\rMotor #1 with rotary sensor on Sense #1, pot on Sense #2\rPWM MAX set to 1500");    
-    printf("\r\r#1 Testing %d Servos, SPI & SD card\r", NUMMOTORS);    
-    while(1) 
-    {            
+    
+    /*
+    DelayMs(400);
+    
+    printf("\r\rTESTING EEPROM");    
+    initI2C(I2C1);           
+    length = strlen(arrI2C1Test);
+    DelayMs(100);
+    printf("\rWriting I2C1 block: %d bytes @ %d", length, EEaddress);
+    EepromWriteBlock(I2C1, EEPROM_ADDRESS, EEaddress, arrI2C1Test, length);
+    printf ("Read byte: %d", (int) dataByte);
+    DelayMs(100);    
+    printf("\rReading I2C1 block");
+    EepromReadBlock (I2C1, EEPROM_ADDRESS, EEaddress, arrI2CTestIn, length);    
+    arrI2CTestIn[length] = '\0';
+    printf("\rRead Data In: %s", arrI2CTestIn);   
+    printf("\rDONE");
+    */
+    
+    DelayMs(100);
+
+    /*
+    printf("\r\rTesting SPI", ActualRS485BaudRate);
+    initHBridgeSPI();
+    printf("\rBridge SPI initialized");
+    PWM_DISABLE = 0;
+    */
+    printf("\rTesting CRC etc.");
+    while(1)
+    {
         if (RS485RxBufferFull)
         {
             RS485RxBufferFull = false;
@@ -361,237 +349,141 @@ int main(void)
             else PrintServoData(numServos, ServoPositions, command, subCommand);                                    
             ClearCopyBuffer();
         }
-        
-        if (intFlag)
+    }
+    
+    printf("\r\rFeather Servo NO USB version");
+    printf("\rInitializing Feather Servo Board at address 0x80: ");
+    #define PCA9685_ADDRESS 0x80 // Basic default address for Adafruit Feather Servo Board 
+    if (initializePCA9685(PCA9685_ADDRESS)) printf(" SUCCESS");
+    else printf(" ERROR");       
+    
+    mAD1IntEnable(INT_ENABLED);
+    
+    DIR1 = 0;
+    DIR2 = 0;
+    DIR3 = 0;
+    DIR4 = 0;
+    PWM_DISABLE = 0;
+    
+   initHBridgeSPI();
+   
+    OC2RS = 0;
+    OC3RS = 0;
+    OC4RS = 0;
+    OC5RS = 0;
+    
+    
+    while(1)
+    {
+        if (ADready)
         {
-            intFlag = false;
-            if (runMode)
-            {               
-                if (memoryFlag)
-                {            
-                    memoryFlag = false;
-                    if (MDD_MediaDetect())
-                    {
-                        if (FSInit())
-                        {
-                            filePtr=FSfopen(filename, FS_READ);        
-                            if (filePtr==NULL) printf("Error: could not open %s", filename);
-                            else if (SUCCESS == FSfseek(filePtr, memoryOffset, SEEK_SET))
-                            {
-                                i = 0;
-                                do {                      
-                                    numBytes = FSfread(&ch, 1, 1, filePtr);
-                                    if (ch != '\n') MEMORYBuffer[i++] = ch;                                                     
-                                } while (i < MAXBUFFER && ch != '\r' && !FSfeof(filePtr));
-                                length = i;
-                                MEMORYBuffer[length] = '\0';                                                
-                                memoryOffset = FSftell(filePtr);
-                                FSfclose(filePtr);     
-                                initHBridgeSPI();
-                                ReadHBridgeData(HBridgeData);
-                                SpiChnClose(SPI_CHANNEL);
-                                if (previousOffset != memoryOffset) 
-                                {                                    
-                                    printf("HBridge: %02X, %02X, %02X, %02X, ", HBridgeData[0], HBridgeData[1], HBridgeData[2], HBridgeData[3]);                                    
-                                    printf("Mem @ %d: %s", memoryOffset, MEMORYBuffer);
-                                }
-                                previousOffset = memoryOffset;
-                            }
-                            else printf("ERROR FSEEK @ %d", memoryOffset);
-                        }
-                    }
-                    else printf("ERROR: MEDIA DETECT");
-                }
-                
-                LEDcounter++;
-                if (LEDcounter > 50)
-                {
-                    LEDcounter = 0;
-                    if (LED) LED = 0;
-                    else LED = 1;
-                }
-                for (i = 0; i < NUMMOTORS; i++)
-                {
-                    mAD1IntEnable(INT_ENABLED);        
-                    if (useExternalPots) PID[i].ADCommand = (long)(((ServoPositions[i] * 3) / 5) + 300);
-                    else PID[i].ADCommand = (long)(((ADresult[i] * 3) / 5) + 300);
-                    
-                    PID[i].ADActual = (long) (1023 - ADresult[i+4]);
-                    
-                    PIDcontrol(i, PID);
-                
-                    if (JogPWM != 0) PWMvalue = JogPWM;
-                    else PWMvalue = PID[i].PWMvalue;                
-                    if (runMode) 
-                    {
-                        if (i == 0) 
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR1 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR1 = FORWARD;                            
-                            PWM1 = PWMvalue;
-                        }
-                        else if (i == 1)
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR2 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR2 = FORWARD;                            
-                            PWM2 = PWMvalue;                            
-                        }                        
-                        else if (i == 2) 
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR3 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR3 = FORWARD;                            
-                            PWM3 = PWMvalue;
-                        }
-                        else
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR4 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR4 = FORWARD;                            
-                            PWM4 = PWMvalue;                            
-                        }
+            ADready = false;
+            EnableAD = false;
+            
+            // printf("\r#%d: POT1 = %d, POT2 = %d, POT3 = %d POT4 = %d", counter++, ADresult[0], ADresult[1], ADresult[2], ADresult[3]);
+            
+            servoPos = (short)(ADresult[0]/4) + 22;      
+            //T2CONbits.TON = 0; // Let her rip
+            
+            //ConfigIntTimer2(T2_INT_OFF | T2_INT_PRIOR_2);            
+            if (!setPCA9685outputs(PCA9685_ADDRESS, 0, 0, servoPos)) printf(" ERROR");         
+            printf("\r#%d: Servo 0 = %d", counter++, ADresult[0]);
                         
-                    }
-                    else PWM4 = PWM3 = PWM2 = PWM1 = 0;               
-                }
-            }
-            else
-            {
-                PWM1 = PWM2 = PWM3 = PWM4 = 0;
-                LED = 0;
-            }
-        }    
-        
-        
-        if (HOSTRxBufferFull)
-        {
-            HOSTRxBufferFull = false; 
-            printf("\rReceived: ");
-            q = 0;
-            command = 0;
-            for (p = 0; p < MAXBUFFER; p++) 
-            {
-                ch = HOSTRxBuffer[p];
-                if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 'A';
-                
-                if (ch >= 'A' && ch <= 'Z') command = ch;
-                else if (ch == ' ') command = ' ';
-                
-                putchar(ch);
-                if (ch == '\r' || ch == ' ')break;
-                if ( ((ch >= '0' && ch <= '9') || ch == '.' || ch == '-') && q < MAXNUM) NUMbuffer[q++] = ch;
-            }
-            if (q) 
-            {
-                NUMbuffer[q] = '\0';
-                floValue = atof(NUMbuffer);
-            }
-            if (command) 
-            {
-                switch (command) 
-                {
-                    case 'J':
-                        JogPWM = (long) floValue;
-                        printf("\rJog: %d", JogPWM);
-                        break;
-                    case 'F':
-                        DIR1 = FORWARD;
-                        printf("\rFORWARD");
-                        break;
-                    case 'R':
-                        DIR1 = REVERSE;
-                        printf("\rREVERSE");
-                        break;                        
-                    case 'P':
-                        if (q) PID[0].kP = PID[1].kP = PID[2].kP = PID[3].kP = floValue;
-                        break;
-                    case 'I':
-                        if (q) PID[0].kI = PID[1].kI = PID[2].kI = PID[3].kI = floValue;
-                        break;
-                    case 'D':
-                        if (q) PID[0].kD = PID[1].kD = PID[2].kD = PID[3].kD = floValue;
-                        break;
-                    case 'O':
-                        if (q) PID[0].PWMoffset = PID[1].PWMoffset = PID[2].PWMoffset = PID[3].PWMoffset = (long) floValue;
-                        break;
-                    case ' ':
-                        if (!runMode) 
-                        {                            
-                            runMode = true;
-                            printf("\rRUN");
-                        }
-                        else
-                        {
-                            runMode = false;                            
-                            for (i = 0; i < NUMMOTORS; i++)                            
-                                PID[i].PreviousPWMvalue = PID[i].PWMvalue = 0;                            
-                            printf("\rHALT");
-                        }
-                        break;
-                    case 'M':
-                        if (displayFlag)
-                        {
-                            displayFlag = false;
-                            printf("\rDisplay OFF");
-                        }
-                        else {
-                            displayFlag = true;
-                            printf("\rDisplay ON");
-                        }   
-                        break;
-                    case 'Z':
-                        ResetPID();
-                        printf("\rPID reset = true");
-                        break;
-                    case 'X':
-                        if (useExternalPots)
-                        {
-                            useExternalPots = false;
-                            printf("\rUse local pots");
-                        }
-                        else
-                        {
-                            useExternalPots = true;
-                            printf("\rExternal pots enabled");                            
-                        }                        
-                        break;
-                    default:
-                        printf("\rCommand: %c", command);
-                        break;
-                } // end switch command
-                
-                makeFloatString(PID[0].kP, 3, KPbuffer);
-                makeFloatString(PID[0].kI, 3, KIbuffer);
-                makeFloatString(PID[0].kD, 3, KDbuffer);
-                
-                printf("\rkP = %s, kI = %s, kD = %s, Offset: %d\r", KPbuffer, KIbuffer, KDbuffer, PID[0].PWMoffset);
-            } // End if command             
-        } // End if HOSTRxBufferFull
-        
-        /*
-        if (DATABufferFull)
-        {
-            DATABufferFull = false;
-            success = processPacket(DATARxBuffer, &dataCommand, &dataSubCommand, arrServoPos, &numServos);
-            result = success;
+            mAD1IntEnable(INT_ENABLED);
+            //ConfigIntTimer2(T2_INT_ON | T2_INT_PRIOR_2);
+            //T2CONbits.TON = 1; // Let her rip
+
+            //OC2RS = ADresult[0] * 2;
+            //OC3RS = ADresult[1] * 2;
+            //OC4RS = ADresult[2] * 2;
+            //OC5RS = ADresult[3] * 2;            
+            // printf("\r#%d: PWM1 = %d, PWM2 = %d, PWM3 = %d PWM4 = %d", counter++, OC2RS, OC3RS, OC4RS, OC5RS); 
+            // printf("\r#%d: ENC1 = %d, ENC2 = %d, ENC3 = %d ENC4 = %d", counter++, EncoderOne, EncoderTwo, EncoderThree, EncoderFour);
+            /*
+            if (EncoderOneDir) printf("\r#%d: Enc Dir1: HIGH, ", counter++);
+            else printf("\r#%d: Enc Dir1: LOW, ", counter++);
+            
+            if (EncoderTwoDir) printf("Enc Dir2: HIGH, ");
+            else printf("Enc Dir2: LOW, ");
+            
+            if (EncoderThreeDir) printf("Enc Dir3: HIGH, ");
+            else printf("Enc Dir3: LOW, ");
+            
+            if (EncoderFourDir) printf("Enc Dir4: HIGH, ");
+            else printf("Enc Dir4: LOW, ");            
+            */
+            DelayMs(10);
         }
-        */
-    } // End while(1))
-} // End main())
+        DelayMs(1);
+        //DelayMs(200);
+        //PWM_SPI_CS = 0;
+        //ReadHBridgeData(1, arrData);        
+        //PWM_SPI_CS = 1;
+        
+        // printf("\r#%d: Data = %02X, %02X, %02X, %02X", loopCounter++, (int)arrData[0], (int)arrData[1], (int)arrData[2], (int)arrData[3]);        
+    }
+    
+    
+    printf("\r\rTesting Interrupt on change:");
+    while(1)
+    {
+        loopCounter++;
+        if (loopCounter > 100)
+        {
+            loopCounter = 0;
+            if (0 == PORTReadBits(IOPORT_G, BIT_15)) PushButtonState = 0;
+            else PushButtonState = 1;
+            
+            if (PushButtonState != PreviousPush)
+            {
+                PreviousPush = PushButtonState;
+                if (PushButtonState) printf("\rPUSH High");
+                else printf("\rPUSH Low");
+            }
+        }
+        
+        if (PortBflag)
+        {
+            PortBflag = false;        
+            printf ("\rInterrupt on Change: %02X", PortBRead);
+        }
+        
+        DelayMs(2);
+    }
+    
+    DelayMs(100);
+    printf("\rTesting encoders\r");
+    while(1)    
+    {
+        if (EnableAD)
+        {
+            mAD1IntEnable(INT_ENABLED);
+            EnableAD = false;
+            // printf("\rAD0 = %d, AD1 = %d, AD3 = %d AD4 = %d", ADresult[0], ADresult[1], ADresult[2], ADresult[3]);            
+            T1CONbits.TON = 0; 
+            DelayMs(10);            
+            
+            if (EncoderOneDir) printf("\r#%d: Enc Dir1: HIGH, ", counter++);
+            else printf("\r#%d: Enc Dir1: LOW, ", counter++);
+            
+            if (EncoderTwoDir) printf("Enc Dir2: HIGH, ");
+            else printf("Enc Dir2: LOW, ");
+            
+            if (EncoderThreeDir) printf("Enc Dir3: HIGH, ");
+            else printf("Enc Dir3: LOW, ");
+            
+            if (EncoderFourDir) printf("Enc Dir4: HIGH, ");
+            else printf("Enc Dir4: LOW, ");                        
+            
+            T1CONbits.TON = 1; // Let her rip
+            DelayMs(10);
+        }
+        
+
+    }
+
+    DelayMs(200);
+}//end main
 
 
 void InitializeSystem(void) 
@@ -603,7 +495,8 @@ void InitializeSystem(void)
     // Turn off JTAG so we get the pins back
     mJTAGPortEnable(false);
     
-    ConfigAd();   
+    ConfigAd();
+    
     
     // Set up timers as counters
     T1CON = 0x00;
@@ -669,7 +562,7 @@ void InitializeSystem(void)
     OC3CONbits.OCM0 = 0;
     OC3RS = 0;
 
-    // Set up PWM OC4
+    // Set up PWM OC4 on D6 on the Olimex 220 board:
     OC4CON = 0x00;
     OC4CONbits.OC32 = 0; // 16 bit PWM
     OC4CONbits.ON = 1; // Turn on PWM
@@ -718,9 +611,12 @@ void InitializeSystem(void)
     INTEnable(INT_SOURCE_UART_RX(RS485uart), INT_DISABLED);
     //INTSetVectorPriority(INT_VECTOR_UART(RS485uart), INT_PRIORITY_LEVEL_2);
     //INTSetVectorSubPriority(INT_VECTOR_UART(RS485uart), INT_SUB_PRIORITY_LEVEL_0);  
-        
     
-    // CONFIGURE DMA CHANNEL 0 FOR UART 5 INTERRUPT ON MATCH       
+    
+    
+    // CONFIGURE DMA CHANNEL 0 FOR UART 5 INTERRUPT ON MATCH   
+    
+    
     for (i = 0; i < MAXBUFFER; i++) RS485RxBufferCopy[i] = 0x00;     
     
     DmaChnOpen(DMA_CHANNEL0, 1, DMA_OPEN_MATCH);    
@@ -739,6 +635,8 @@ void InitializeSystem(void)
     // Once we configured the DMA channel we can enable it
     DmaChnEnable(DMA_CHANNEL0);        
        
+   
+    
     
     //PORTClearBits(IOPORT_B, BIT_3 | BIT_12 | BIT_13 | BIT_14 | BIT_15);
     //mPORTBSetPinsDigitalOut(BIT_0 | BIT_3 | BIT_12 | BIT_13 | BIT_14 | BIT_15);
@@ -769,18 +667,18 @@ void InitializeSystem(void)
     // PORTSetBits(IOPORT_D, BIT_11|BIT_13);    
     
     PORTSetPinsDigitalIn(IOPORT_E, BIT_5 | BIT_7 | BIT_8 | BIT_9);    // RE5 = ENC2 DIR, RE7 = ENC3 DIR, RE8 = ENC4 DIR, RE9 = ENC1 DIR
-    PORTSetPinsDigitalOut(IOPORT_E, BIT_3 | BIT_4 | BIT_6);    // RE3 = TEST_OUT, RE4 = SD_CS, RE6 = LED
+    PORTSetPinsDigitalOut(IOPORT_E, BIT_3 | BIT_4 | BIT_6);    // RE3 = TEST_OUT, RE4 = SD_CS, RE6 = LED_OUT
     
-    // TEST_OUT = 0;
-    LED = 0;
+    TEST_OUT = 0;
+    LED_OUT = 0;
     SD_CS = 1;
     
     PORTSetPinsDigitalOut(IOPORT_F, BIT_1);             //RF1 = PWM_DISABLE
-    PWM_DISABLE = 0;
+    PWM_DISABLE = 1;
     
-    PORTSetPinsDigitalOut(IOPORT_G, BIT_12);   // RG9 = TEST_OUT, RG12 = DIR1 
+    PORTSetPinsDigitalOut(IOPORT_G, BIT_12);   // RG12 = DIR1 
 
-    PORTSetPinsDigitalIn(IOPORT_G, BIT_9 | BIT_15);   // RG9 = SD_DETECT, RG15 = PUSHBUTTON_IN
+    PORTSetPinsDigitalIn(IOPORT_G, BIT_15);   // RG15 = PUSHBUTTON_IN
         
     DIR1 = DIR2 = DIR3 = DIR4 = 0;                
     
@@ -790,7 +688,7 @@ void InitializeSystem(void)
     T2CONbits.TCKPS1 = 0;
     T2CONbits.TCKPS0 = 0;    
     PR2 = 4000; // Use 50 microsecond rollover for 20 khz
-   T2CONbits.TON = 1; // Let her rip   
+    T2CONbits.TON = 1; // Let her rip   
     ConfigIntTimer2(T2_INT_ON | T2_INT_PRIOR_2);            
     
     
@@ -799,33 +697,54 @@ void InitializeSystem(void)
    
 }//end UserInit
 
-// Timer 2 generates an interrupt every 50 microseconds approximately
+
+
 void __ISR(_TIMER_2_VECTOR, ipl5) Timer2Handler(void) 
-{        
-    static int intCounter = 0; 
-    static int memoryCounter = 625; 
+{
+    static short PIDupdateCounter = 0;
+    static short milliSecondCounter = 0;
+    mT2ClearIntFlag(); // clear the interrupt flag
     
-    mT2ClearIntFlag(); // clear the interrupt flag    
+    //if (TEST_OUT) TEST_OUT = 0;
+    //else TEST_OUT = 1;    
     
-    intCounter++;
-    if (intCounter >= 50)
+    PIDupdateCounter++;
+    if (PIDupdateCounter >= 30)
     {
-        intCounter = 0;
-        intFlag = true;
+        PIDupdateCounter = 0;
+        if (TestMode)
+        {
+            SendFlag = true;
+            //while (!UARTTransmitterIsReady(HOSTuart));            
+            //UARTSendDataByte(HOSTuart, '>');
+        }
+        //HOSTRxBuffer[0] = '>';
+        //HOSTRxBuffer[1] = '\0';
+        //HOSTRxBufferFull = true;        
     }
     
-    if (memoryCounter) memoryCounter--;
-    if (!memoryCounter)
+    
+    milliSecondCounter++;
+    if (milliSecondCounter >= 2000)
     {
-        memoryCounter=625;
-        memoryFlag = true;
+        milliSecondCounter = 0;
+        if (LED_OUT) 
+        {
+            LED_OUT = 0;            
+        }
+        else
+        {
+            LED_OUT = 1;            
+        }
     }
+    
+    
 }
 
 void ConfigAd(void) 
 {
     // mPORTBSetPinsAnalogIn(BIT_12 | BIT_13 | BIT_14 | BIT_15); // $$$$
-    mPORTBSetPinsAnalogIn(BIT_1 | BIT_2 | BIT_3 | BIT_4 | BIT_12 | BIT_13 | BIT_14 | BIT_15); // $$$$
+    mPORTBSetPinsAnalogIn(BIT_1 | BIT_2 | BIT_3 | BIT_4); // $$$$
 
     // ---- configure and enable the ADC ----
 
@@ -837,7 +756,7 @@ void ConfigAd(void)
 #define PARAM1  ADC_MODULE_ON | ADC_FORMAT_INTG | ADC_CLK_AUTO | ADC_AUTO_SAMPLING_ON
 
     // ADC ref external    | disable offset test    | enable scan mode | perform  samples | use dual buffers | use only mux A
-#define PARAM2  ADC_VREF_AVDD_AVSS | ADC_OFFSET_CAL_DISABLE | ADC_SCAN_ON | ADC_SAMPLES_PER_INT_8 | ADC_ALT_BUF_ON | ADC_ALT_INPUT_OFF
+#define PARAM2  ADC_VREF_AVDD_AVSS | ADC_OFFSET_CAL_DISABLE | ADC_SCAN_ON | ADC_SAMPLES_PER_INT_4 | ADC_ALT_BUF_ON | ADC_ALT_INPUT_OFF
 
     //                   use ADC internal clock | set sample time
     // #define PARAM3  ADC_CONV_CLK_INTERNAL_RC | ADC_SAMPLE_TIME_31
@@ -854,8 +773,8 @@ SKIP_SCAN_AN8 | SKIP_SCAN_AN9 | SKIP_SCAN_AN10 | SKIP_SCAN_AN11
 #define PARAM4    ENABLE_AN1_ANA | ENABLE_AN2_ANA | ENABLE_AN3_ANA | ENABLE_AN4_ANA    
 #define PARAM5 SKIP_SCAN_AN0 |\
 SKIP_SCAN_AN5 | SKIP_SCAN_AN6 | SKIP_SCAN_AN7 |\
-SKIP_SCAN_AN8 | SKIP_SCAN_AN9 | SKIP_SCAN_AN10 | SKIP_SCAN_AN11 
-// SKIP_SCAN_AN12 | SKIP_SCAN_AN13 | SKIP_SCAN_AN14 | SKIP_SCAN_AN15
+SKIP_SCAN_AN8 | SKIP_SCAN_AN9 | SKIP_SCAN_AN10 | SKIP_SCAN_AN11 |\
+SKIP_SCAN_AN12 | SKIP_SCAN_AN13 | SKIP_SCAN_AN14 | SKIP_SCAN_AN15
 
 
     // set negative reference to Vref for Mux A
@@ -929,9 +848,29 @@ unsigned char dataIn;
 // Sample Phase for the input bit at the end of the data out time.
 // Set the Clock Edge reversed: transmit from active to idle.
 // Use 80 Mhz / 1024 = 78.125 Khz clock
+
 void initHBridgeSPI(void)
 {
     SpiChnOpen(SPI_CHANNEL, SPI_OPEN_MSTEN | SPI_OPEN_MODE8 | SPI_OPEN_CKE_REV | SPI_OPEN_ON | SPI_OPEN_SMP_END, 1024);  
+    // SpiChnOpen(SPI_CHANNEL, SPI_OPEN_MSTEN | SPI_OPEN_MODE8 | SPI_OPEN_CKP_HIGH | SPI_OPEN_ON | SPI_OPEN_SMP_END, 128);  
+     
+    /*
+    SPI1CON = 0x00;
+    SPI1CONbits.FRMEN = 0;  // Disable framed SPI
+    SPI1CONbits.MSSEN = 0;  // Slave select SPI support is disabled.
+    SPI1CONbits.SSEN = 0; // SSx pin not used for Slave mode, pin controlled by port function.
+    //SPI2CONbits.MCLKSEL = 0; // Use default PBCLK
+    SPI1CONbits.MSTEN = 1; // Master mode
+    SPI1CONbits.CKP = 0; // Idle state for clock is a low level; active state is a high level
+    SPI1CONbits.SMP = 0; // Input data sampled at middle of data output time
+    SPI1CONbits.CKE = 0; // Set the Clock Edge reversed: transmit from active to idle.
+    //SPI2CONbits.DISSDI = 0; // SDI pin is controlled by the SPI module
+    SPI1CONbits.MODE16 = 0; // 8 bit data transfers
+    SPI1CONbits.MODE32 = 0;
+    SPI1BRG = 0x4; // Divide 
+    //SPI1CON2 = 0x00; // Disable audio codec
+    SPI1CONbits.ON = 1; // Turn on SPI 
+    */
 }
 
 
@@ -1054,70 +993,6 @@ unsigned short decodePacket(unsigned char *ptrInPacket, unsigned char *ptrData)
     return (j);
 }
 
-long PIDcontrol(long servoID, struct PIDtype *PID)
-{
-    long lngError;     
-    long actualPosition;    
-    long commandPosition; 
-    long diffPosition;
-    long pastError;
-    long derError;
-    long lngPosDiff;
-    static short errIndex = 0;
-    float PCorr = 0, ICorr = 0, DCorr = 0;    
-    
-    if (servoID < 0 || servoID >= NUMMOTORS) return 0;    
-    
-    if (PID[servoID].reset) diffPosition = 0;
-    else diffPosition = PID[servoID].ADActual - PID[servoID].ADPrevious;        
-    PID[servoID].ADPrevious = PID[servoID].ADActual;
-    
-    actualPosition = PID[servoID].ADActual;    
-    commandPosition = PID[servoID].ADCommand;
-    lngError = actualPosition - commandPosition;    
-
-    if (lngError > 0x7FFF) lngError = 0x7FFF;
-    if (lngError < -0x7FFF) lngError = -0x7FFF;
-    
-    pastError = PID[servoID].error[errIndex];    
-    PID[servoID].sumError = PID[servoID].sumError + lngError - pastError;
-    PID[servoID].error[errIndex] = (short) lngError;
-    
-    if (PID[servoID].sumError > MAXSUM) PID[servoID].sumError = MAXSUM;
-    if (PID[servoID].sumError < -MAXSUM) PID[servoID].sumError = -MAXSUM;
-        
-    errIndex++;
-    if (errIndex >= FILTERSIZE) errIndex = 0;             
-    
-    derError = lngError - pastError;     
-    
-    PCorr = ((float) lngError) * -PID[servoID].kP;    
-    ICorr = ((float) PID[servoID].sumError)  * -PID[servoID].kI;
-    DCorr = ((float) derError) * -PID[servoID].kD;
-
-    float PIDcorrection = PCorr + ICorr + DCorr;
-    
-    if (PIDcorrection < 0) PID[servoID].PWMvalue = (long) (PIDcorrection - PID[servoID].PWMoffset);            
-    else PID[servoID].PWMvalue = (long) (PIDcorrection + PID[servoID].PWMoffset);                    
-               
-    if (PID[servoID].PWMvalue > PWM_MAX) 
-        PID[servoID].PWMvalue = PWM_MAX;
-    else if (PID[servoID].PWMvalue < -PWM_MAX) 
-        PID[servoID].PWMvalue = -PWM_MAX;
-                
-    if (displayFlag)
-    {
-        lngPosDiff = abs(lngError - PID[servoID].previousError);
-        if (lngPosDiff > 2)
-        {
-            printf("\rID: %d, COM: %d, ACT: %d, ERR: %d, SUM: %d, P: %d, I: %d, D: %d, PWM: %d", servoID, commandPosition, actualPosition, lngError, PID[servoID].sumError, (int)PCorr, (int)ICorr, (int)DCorr, PID[servoID].PWMvalue);             
-            displayPWMFlag = true;
-            PID[servoID].previousError = lngError;
-        }  
-    }
-    PID[servoID].reset = false;
-    return 0;
-}
 
 
 /*
@@ -1160,41 +1035,3 @@ void __ISR(RS485_VECTOR, ipl2) IntRS485UartHandler(void) {
     }
 }
 */ 
-
-
-    /*
-    if (MDD_MediaDetect())
-    {
-        printf("\rInitializing SD card...");
-        while (!FSInit());            
-        printf("\rOpening test file %s to write...", filename);
-        filePtr = FSfopen(filename, FS_APPEND);        
-        if (filePtr==NULL) printf("Error: could not open %s", filename);
-        else
-        {
-            printf("\rSuccess! Opened %s. writing data\r", filename);    
-            length = strlen(MessageOut);
-            numBytes = FSfwrite(MessageOut, 1, length, filePtr);
-            printf("\rLength of message: %d, bytes written: %d", length, numBytes);
-            printf("\rClosing file");
-            FSfclose(filePtr); 
-        }   
-    
-        printf("\rOpening test file to read...");
-        filePtr = FSfopen(filename, FS_READ);
-        if (filePtr==NULL) printf("Error: could not open %s", filename);
-        else
-        {
-            printf("\rSuccess! Opened %s. Reading data\r\r", filename);                
-            do {                      
-                numBytes = FSfread(&ch, 1, 1, filePtr);
-                putchar(ch);                
-            } while (!FSfeof(filePtr)); 
-            printf("\rEND OF FILE");
-            printf("\rClosing file");
-            FSfclose(filePtr); 
-        }   
-        DelayMs(10);       
-    }
-    else printf("\rNo SD card found");    
-    */
