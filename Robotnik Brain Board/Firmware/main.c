@@ -1,8 +1,9 @@
 /**********************************************************************************
- * PROJECT: ROBOTNIK BRAIN BOARD
- * main.c
+ * PROJECT: ROBOTNIK BRAIN BOARD - NON-USB VERSION
+  * main.c
  *
  * Compiled for PIC32MX795 XC32 compiler version 1.30
+ * Utilizes Infineon IFX9201 BRIDGE DRIVER
  
  * Created from USB_Robotnik - USB routines removed
  * 
@@ -19,7 +20,11 @@
  * 8-26-19: Works receiving 100 servos @ 921600 baud.
  * 8-31-19: Servo loop works great, also added SPI with SD card and H Bridge.
  * 9-1-19:  Works with USB_Robotnik and VC++ Robotnik Controller recording/playing four servo motors.
- * 
+ *          Cleaned up flashing LED indicator.
+ * 9-22-19: Recompiled 
+ * 12-8-19:  Recompiled.  Default mode = REMOTE
+ * 5-3-20: Modified and optimized PID for ServoCity motors 53:1 ratio. 
+ *         Checked SD card reads & writes; Also SPI diagnostics from IFX9201 H bridge.
  ***********************************************************************************/
 #include <xc.h>
 #include "HardwareProfile.h"
@@ -39,7 +44,7 @@
 #include "Delay.h"
 #include "Defs.h"
 #include "SD-SPI.h"
-
+#define _SUPPRESS_PLIB_WARNING
 
 /** CONFIGURATION **************************************************/
 #pragma config UPLLEN   = ON        // USB PLL Enabled
@@ -66,8 +71,12 @@
 #define false FALSE
 #define true TRUE
 
-#define PUSHBUTTON_IN LATGbits.LATG15
+#define HALTED 0
+#define LOCAL 1
+#define JOG 2
+#define REMOTE 3
 
+#define PUSHBUTTON_IN LATGbits.LATG15
 
 #define EncoderOne TMR1
 #define EncoderTwo TMR5
@@ -109,16 +118,16 @@
 #define LEFT_ARROW 68
 #define UP_ARROW 65
 #define DOWN_ARROW 66
+#define MAXNUM 16
+#define MAXBUFFER 255
 
 /** V A R I A B L E S ********************************************************/
-// #define MAXBUFFER CDC_DATA_IN_EP_SIZE
-#define MAXBUFFER 255
+unsigned char NUMbuffer[MAXNUM + 1];
 unsigned char HOSTRxBuffer[MAXBUFFER+1];
 unsigned char HOSTRxBufferFull = false;
 unsigned char HOSTTxBuffer[MAXBUFFER+1]; 
 unsigned char MEMORYBuffer[MAXBUFFER+1]; 
 unsigned char displayFlag = false;
-unsigned char displayPWMFlag = false;
 
 unsigned char RS485RxBufferFull = false;
 unsigned char RS485TxBufferFull = false;
@@ -126,9 +135,8 @@ unsigned char RS485RxBuffer[MAXBUFFER+1];
 unsigned char RS485RxBufferCopy[MAXBUFFER+1];
 unsigned char ServoData[MAXBUFFER+1];
 short servoPositions[MAXSERVOS];
-
-unsigned char outMessage[] = "\rJust putzing around";
 long ActualRS485BaudRate = 0;
+int timeout = 0;
 
 /** P R I V A T E  P R O T O T Y P E S ***************************************/
 
@@ -152,6 +160,9 @@ unsigned char ADready = false;
 unsigned char EnableAD = false;
 unsigned char DATABufferFull = false;
 void ConfigAd(void);
+void ClearCopyBuffer();
+void makeFloatString(float InValue, int numDecimalPlaces, unsigned char *arrAscii);
+
 
 enum
 {
@@ -164,194 +175,98 @@ enum
 };
 
 short time, seconds = 0, minutes = 0, hundredths = 0;
-
 unsigned char TestMode = false;
-
 #define MAXPOTS 8
 unsigned short ADresult[MAXPOTS];
-
 unsigned short PortBRead = 0;
 unsigned char PortBflag = false;
-
-
-void ClearCopyBuffer()
-{
-    int i;
-    for (i = 0; i < MAXBUFFER; i++)
-    {
-        RS485RxBufferCopy[i] = '\0';
-        // RS485RxBuffer[i] = '\0';
-    }
-}
-
-
-unsigned char processPacketData(short packetDataLength, unsigned char *ptrPacketData, short *numServos, short *ptrServoPositions, unsigned char *command, unsigned char *subCommand)
-{
-    MConvertType servoValue;    
-    short j, i = 0;  
-    
-    if (!CheckCRC(ptrPacketData, packetDataLength)) return false;    
-    *command = ptrPacketData[i++];
-    *subCommand = ptrPacketData[i++];
-    *numServos = ptrPacketData[i++];
-    
-    
-    if (*numServos > MAXSERVOS) return false;
-    j = 0;
-    while(j < *numServos)
-    {
-        servoValue.b[0] = ptrPacketData[i++];
-        servoValue.b[1] = ptrPacketData[i++];
-        ptrServoPositions[j++] = servoValue.integer;
-    }
-    return true;
-}
-unsigned char ReadHBridgeData(unsigned char *ptrData)
-{
-    unsigned char dataOut = 0;
-    
-    PWM_SPI_CS = 0;
-    dataOut = SendReceiveSPI(0b00000000);
-    ptrData[0] = dataOut;
-    dataOut = SendReceiveSPI(0b00000000);
-    ptrData[1] = dataOut;
-    dataOut = SendReceiveSPI(0b00000000);
-    ptrData[2] = dataOut;
-    dataOut = SendReceiveSPI(0b00000000);
-    ptrData[3] = dataOut;
-    PWM_SPI_CS = 1;
-    
-    return 0;
-}
-
-#define MAXNUM 16
-unsigned char NUMbuffer[MAXNUM + 1];
-unsigned char KPbuffer[MAXNUM + 1];
-unsigned char KIbuffer[MAXNUM + 1];
-unsigned char KDbuffer[MAXNUM + 1];
-
-void makeFloatString(float InValue, int numDecimalPlaces, unsigned char *arrAscii)
-{
-    int i = 0, j = 0;        
-    float floValue = InValue;
-    unsigned char digit;
-    
-    if (floValue < 0)
-    {
-        floValue = 0 - floValue;
-        arrAscii[j++] = '-';
-    }
-    while (floValue >= 1)
-    {
-        floValue = floValue / 10.0;
-        i++;
-    }
-    if (i == 0) 
-    {
-        arrAscii[j++] = '0';
-        arrAscii[j++] = '.';
-    }
-    else
-    {
-        while (i > 0)
-        {
-            floValue = floValue * 10;
-            digit = (unsigned char)floValue;
-            arrAscii[j++] = digit + '0';
-            floValue = floValue - (float) digit;
-            i--;
-        }
-        arrAscii[j++] = '.';
-    }
-    if (numDecimalPlaces > 0)
-    {        
-        i = numDecimalPlaces;
-        while (i > 0)
-        {  
-            floValue = floValue * 10;
-            digit = (unsigned char)floValue;
-            arrAscii[j++] = digit + '0';
-            floValue = floValue - (float) digit;
-            i--;                         
-        }
-    }
-    else arrAscii[j++] = '0';
-    arrAscii[j++] = '\0';
-}
-
-
-void ResetPID()
-{
-    int i, j;
-    for (i = 0; i < NUMMOTORS; i++)
-    {
-        PID[i].sumError = 0;        
-        PID[i].kP = 25.0;
-        PID[i].kI = 0.020;
-        PID[i].kD = 4.0;
-        PID[i].PWMoffset = 220; // 100;
-        PID[i].PreviousPWMvalue = PID[i].PWMvalue = 0;
-        PID[i].Rollovers = 0;                
-        PID[i].ADActual = 0;
-        PID[i].ADPrevious = 0;
-        PID[i].ADCommand = 0;
-        PID[i].reset = true;
-        PID[i].previousError = 0;
-        for (j = 0; j < FILTERSIZE; j++) PID[i].error[j] = 0;
-    }
-}
-
-void PrintServoData(short numServos, short *ptrServoPositions, unsigned char command, unsigned char subCommand)
-{
-    int i;
-    printf("\rOK! Com: %d, Sub: %d, servos %d: ", command, subCommand, numServos);
-    for (i = 0; i < 10; i++) printf("%d, ", ptrServoPositions[i]);
-}
-
-
 unsigned char intFlag = false;
 unsigned char memoryFlag = false;
 
+
+
 int main(void) 
 {
-    unsigned char i = 0, p = 0, q = 0;        
+    short i = 0, j = 0, p = 0, q = 0;        
     long PWMvalue = 0;    
     unsigned char command, subCommand, ch;
-    unsigned char runMode = true;
-    unsigned char useExternalPots = true;
     int JogPWM = 0;
     float floValue;            
-    unsigned char dataCommand = 0, dataSubCommand = 0;
     unsigned char HBridgeData[4];
     short LEDcounter = 0;
     FSFILE *filePtr;
     char filename[] = "NextFile.txt";
-    char MessageOut[] = "\r\nI'll not have any beer in my dormitory";
     short length = 0;
     unsigned short numBytes;
-    long memoryOffset = 0, previousOffset = 0;
     short dataLength = 0;
-    MConvertType convert;
     unsigned char PacketData[MAXBUFFER];
     short numServos;
     short ServoPositions[MAXSERVOS] = {512,512,512,512};
+    unsigned char MessageOut[] = "You can eat the driver and his gloves\r\n ";
+    unsigned ADdisplay = true;
+    short SPIcounter = 0;
+    
+    unsigned char runMode = LOCAL;
+    unsigned char previousRunMode = LOCAL;
         
     PWM1 = PWM2 = PWM3 = PWM4 = 0;
     ResetPID();
-    
-    DelayMs(200);
+        
+    DelayMs(10);
     InitializeSystem();  
-
-    SD_CS = 1;
-    PWM_SPI_CS = 1;   
+    DelayMs(10);
     
-    DelayMs(100);    
-    printf("\rTesting SPI and RS485 DMA. RUN mode enabled...");
-
-    // printf("\r\rTwo Motor Controller Board Rev 2.0\rStore on GitHub 6-3-19\rMotor #1 with rotary sensor on Sense #1, pot on Sense #2\rPWM MAX set to 1500");    
-    printf("\r\r#1 Testing %d Servos, SPI & SD card\r", NUMMOTORS);    
+    LED = 1;
+    SD_CS = 1;
+    SD_WE = 1; // ENable writes to SD card
+    PWM_SPI_CS = 1;   
+        
+    DelayMs(10);    
+    
+    if (runMode) printf("\r\rBrain Board - PID for Servo City motors. MOTORS ON: ");
+    else printf("\r\rBrain Board - PID for Servo City motors. MOTORS OFF: ");
+    
+    if (previousRunMode == LOCAL) printf("LOCAL MODE");
+    else if (previousRunMode == REMOTE) printf("REMOTE MODE");
+    else if (previousRunMode == JOG) printf("JOG MODE");
+    else printf("MODE ERROR");    
+    
+    if (MDD_MediaDetect())
+    {
+        printf("\rInitializing SD card...");
+        while (!FSInit());               
+        printf("\rOpening test file %s to write...", filename);
+        filePtr = FSfopen(filename, FS_APPEND);        
+        if (filePtr==NULL) printf("Error: could not open %s", filename);
+        else
+        {
+            printf("\rSuccess! Opened %s. writing data\r", filename);    
+            length = strlen(MessageOut);
+            numBytes = FSfwrite(MessageOut, 1, length, filePtr);
+            printf("\rLength of message: %d, bytes written: %d", length, numBytes);
+            printf("\rClosing file");
+            FSfclose(filePtr); 
+        }           
+        printf("\rOpening test file to read...");
+        filePtr = FSfopen(filename, FS_READ);
+        if (filePtr==NULL) printf("Error: could not open %s", filename);
+        else
+        {
+            printf("\rSuccess! Opened %s. Reading data\r\r", filename);                
+            do {                      
+                numBytes = FSfread(&ch, 1, 1, filePtr);
+                putchar(ch);                
+            } while (!FSfeof(filePtr)); 
+            printf("\rEND OF FILE");
+            printf("\rClosing file");
+            FSfclose(filePtr); 
+        }   
+        DelayMs(10);       
+    }
+    else printf("\rNo SD card found");    
+    
     while(1) 
-    {            
+    {          
         if (RS485RxBufferFull)
         {
             RS485RxBufferFull = false;
@@ -360,113 +275,84 @@ int main(void)
                 printf("\rCRC ERROR");
             else PrintServoData(numServos, ServoPositions, command, subCommand);                                    
             ClearCopyBuffer();
+            
+            LEDcounter++;
+            if (LEDcounter > 4)
+            {
+                LEDcounter = 0;
+                if (LED) LED = 0;
+                else LED = 1;
+            }            
         }
         
         if (intFlag)
         {
             intFlag = false;
+            if (TEST_OUT) TEST_OUT = 0;
+            else TEST_OUT = 1;
+
             if (runMode)
             {               
-                if (memoryFlag)
-                {            
-                    memoryFlag = false;
-                    if (MDD_MediaDetect())
-                    {
-                        if (FSInit())
-                        {
-                            filePtr=FSfopen(filename, FS_READ);        
-                            if (filePtr==NULL) printf("Error: could not open %s", filename);
-                            else if (SUCCESS == FSfseek(filePtr, memoryOffset, SEEK_SET))
-                            {
-                                i = 0;
-                                do {                      
-                                    numBytes = FSfread(&ch, 1, 1, filePtr);
-                                    if (ch != '\n') MEMORYBuffer[i++] = ch;                                                     
-                                } while (i < MAXBUFFER && ch != '\r' && !FSfeof(filePtr));
-                                length = i;
-                                MEMORYBuffer[length] = '\0';                                                
-                                memoryOffset = FSftell(filePtr);
-                                FSfclose(filePtr);     
-                                initHBridgeSPI();
-                                ReadHBridgeData(HBridgeData);
-                                SpiChnClose(SPI_CHANNEL);
-                                if (previousOffset != memoryOffset) 
-                                {                                    
-                                    printf("HBridge: %02X, %02X, %02X, %02X, ", HBridgeData[0], HBridgeData[1], HBridgeData[2], HBridgeData[3]);                                    
-                                    printf("Mem @ %d: %s", memoryOffset, MEMORYBuffer);
-                                }
-                                previousOffset = memoryOffset;
-                            }
-                            else printf("ERROR FSEEK @ %d", memoryOffset);
-                        }
-                    }
-                    else printf("ERROR: MEDIA DETECT");
-                }
-                
-                LEDcounter++;
-                if (LEDcounter > 50)
+                /*
+                HBridgeSPIenable++;
+                if (HBridgeSPIenable >= 1000)
                 {
-                    LEDcounter = 0;
-                    if (LED) LED = 0;
-                    else LED = 1;
-                }
+                    HBridgeSPIenable = 0;
+                    initHBridgeSPI();
+                    ReadHBridgeData(HBridgeData);
+                    printf("\r#%d: HBridge: %02X, %02X, %02X, %02X", SPIcounter++, HBridgeData[0], HBridgeData[1], HBridgeData[2], HBridgeData[3]);
+                    SpiChnClose(SPI_CHANNEL);                
+                }            
+                */
+                mAD1IntEnable(INT_ENABLED);
                 for (i = 0; i < NUMMOTORS; i++)
-                {
-                    mAD1IntEnable(INT_ENABLED);        
-                    if (useExternalPots) PID[i].ADCommand = (long)(((ServoPositions[i] * 3) / 5) + 300);
-                    else PID[i].ADCommand = (long)(((ADresult[i] * 3) / 5) + 300);
-                    
-                    PID[i].ADActual = (long) (1023 - ADresult[i+4]);
-                    
-                    PIDcontrol(i, PID);
-                
-                    if (JogPWM != 0) PWMvalue = JogPWM;
+                {                            
+                    if (runMode == REMOTE) PID[i].ADCommand = (long)(((ServoPositions[i] * 3) / 5) + 300);
+                    else PID[i].ADCommand = (long)(((ADresult[i] * 3) / 5) + 300);                    
+                    PID[i].ADActual = (long) (1023 - ADresult[i+4]);                    
+                    PIDcontrol(i, PID);                
+                    if (runMode == JOG) PWMvalue = JogPWM;
                     else PWMvalue = PID[i].PWMvalue;                
-                    if (runMode) 
+                    if (i == 0) 
                     {
-                        if (i == 0) 
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR1 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR1 = FORWARD;                            
-                            PWM1 = PWMvalue;
+                        if (PWMvalue < 0)
+                        {            
+                            DIR1 = REVERSE;                                      
+                            PWMvalue = 0 - PWMvalue;
                         }
-                        else if (i == 1)
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR2 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR2 = FORWARD;                            
-                            PWM2 = PWMvalue;                            
-                        }                        
-                        else if (i == 2) 
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR3 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR3 = FORWARD;                            
-                            PWM3 = PWMvalue;
+                        else DIR1 = FORWARD;                                    
+                        PWM1 = PWMvalue;                            
+                    }                        
+                    else if (i == 1)
+                    {
+                        if (PWMvalue < 0)
+                        {            
+                            DIR2 = REVERSE;                    
+                            PWMvalue = 0 - PWMvalue;
                         }
-                        else
-                        {
-                            if (PWMvalue < 0)
-                            {            
-                                DIR4 = REVERSE;                    
-                                PWMvalue = 0 - PWMvalue;
-                            }
-                            else DIR4 = FORWARD;                            
-                            PWM4 = PWMvalue;                            
+                        else DIR2 = FORWARD;
+                        PWM2 = PWMvalue;                            
+                    }                                                
+                    else if (i == 2) 
+                    {
+                        if (PWMvalue < 0)
+                        {            
+                            DIR3 = REVERSE;                    
+                            PWMvalue = 0 - PWMvalue;
                         }
-                        
+                        else DIR3 = FORWARD;                            
+                        PWM3 = PWMvalue;
                     }
-                    else PWM4 = PWM3 = PWM2 = PWM1 = 0;               
+                    else
+                    {
+                        if (PWMvalue < 0)
+                        {            
+                            DIR4 = REVERSE;                    
+                            PWMvalue = 0 - PWMvalue;
+                        }
+                        else DIR4 = FORWARD;                            
+                        PWM4 = PWMvalue;                            
+                    }                        
                 }
             }
             else
@@ -486,14 +372,10 @@ int main(void)
             for (p = 0; p < MAXBUFFER; p++) 
             {
                 ch = HOSTRxBuffer[p];
-                if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 'A';
-                
-                if (ch >= 'A' && ch <= 'Z') command = ch;
-                else if (ch == ' ') command = ' ';
-                
+                if (isalpha(ch) || ch == ' ') command = ch;                
                 putchar(ch);
                 if (ch == '\r' || ch == ' ')break;
-                if ( ((ch >= '0' && ch <= '9') || ch == '.' || ch == '-') && q < MAXNUM) NUMbuffer[q++] = ch;
+                if ( (isdigit(ch) || ch == '.' || ch == '-') && q < MAXNUM) NUMbuffer[q++] = ch;
             }
             if (q) 
             {
@@ -504,18 +386,6 @@ int main(void)
             {
                 switch (command) 
                 {
-                    case 'J':
-                        JogPWM = (long) floValue;
-                        printf("\rJog: %d", JogPWM);
-                        break;
-                    case 'F':
-                        DIR1 = FORWARD;
-                        printf("\rFORWARD");
-                        break;
-                    case 'R':
-                        DIR1 = REVERSE;
-                        printf("\rREVERSE");
-                        break;                        
                     case 'P':
                         if (q) PID[0].kP = PID[1].kP = PID[2].kP = PID[3].kP = floValue;
                         break;
@@ -528,18 +398,39 @@ int main(void)
                     case 'O':
                         if (q) PID[0].PWMoffset = PID[1].PWMoffset = PID[2].PWMoffset = PID[3].PWMoffset = (long) floValue;
                         break;
+                    case 'R':
+                        runMode = REMOTE;
+                        printf("REMOTE MODE ON");
+                        break;
+                    case 'L':
+                        runMode = LOCAL;
+                        printf("LOCAL ON");
+                        break;       
+                    case 'J':
+                        JogPWM = (long) floValue;
+                        printf("\rJOG ON: %d", JogPWM);
+                        runMode = JOG;                        
+                        break;                        
+                    case 'H':
+                        initHBridgeSPI();
+                        ReadHBridgeData(HBridgeData);
+                        printf("\r#%d: HBridge: %02X, %02X, %02X, %02X", SPIcounter++, HBridgeData[0], HBridgeData[1], HBridgeData[2], HBridgeData[3]);
+                        SpiChnClose(SPI_CHANNEL);
+                        break;
                     case ' ':
-                        if (!runMode) 
+                        if (runMode) 
                         {                            
-                            runMode = true;
-                            printf("\rRUN");
+                            previousRunMode = runMode;
+                            runMode = HALTED; 
+                            printf("\rHALT");
                         }
                         else
                         {
-                            runMode = false;                            
-                            for (i = 0; i < NUMMOTORS; i++)                            
-                                PID[i].PreviousPWMvalue = PID[i].PWMvalue = 0;                            
-                            printf("\rHALT");
+                            runMode = previousRunMode;
+                            if (runMode == LOCAL) printf("\rAD MODE");
+                            else if (runMode == REMOTE) printf("\rREMOTE MODE");
+                            else if (runMode == JOG) printf("\rJOG MODE");
+                            else printf("\rMODE ERROR");
                         }
                         break;
                     case 'M':
@@ -557,28 +448,23 @@ int main(void)
                         ResetPID();
                         printf("\rPID reset = true");
                         break;
-                    case 'X':
-                        if (useExternalPots)
+                    case 'T':
+                        if (ADdisplay)
                         {
-                            useExternalPots = false;
-                            printf("\rUse local pots");
+                            ADdisplay = false;
+                            printf("\rPot display OFF");
                         }
                         else
                         {
-                            useExternalPots = true;
-                            printf("\rExternal pots enabled");                            
-                        }                        
+                            ADdisplay = true;
+                            printf("\rPot display ON");
+                        }
                         break;
                     default:
                         printf("\rCommand: %c", command);
                         break;
-                } // end switch command
-                
-                makeFloatString(PID[0].kP, 3, KPbuffer);
-                makeFloatString(PID[0].kI, 3, KIbuffer);
-                makeFloatString(PID[0].kD, 3, KDbuffer);
-                
-                printf("\rkP = %s, kI = %s, kD = %s, Offset: %d\r", KPbuffer, KIbuffer, KDbuffer, PID[0].PWMoffset);
+                } // end switch command                
+                printf("\rkP = %0.1f, kI = %0.3f, kD = %0.1f, Offset: %d\r", PID[0].kP, PID[0].kI, PID[0].kD, PID[0].PWMoffset);
             } // End if command             
         } // End if HOSTRxBufferFull
         
@@ -746,7 +632,7 @@ void InitializeSystem(void)
     // PORTSetPinsDigitalIn(IOPORT_B, BIT_1 | BIT_2);
     // PORTSetPinsDigitalOut(IOPORT_B, BIT_0);
     
-    PORTSetPinsDigitalOut(IOPORT_A, BIT_5);  // RA5 = DIR4
+    PORTSetPinsDigitalOut(IOPORT_A, BIT_0 | BIT_5);  // RA5 = DIR4
     //PORTClearBits(IOPORT_A, BIT_5);
     
     PORTSetPinsDigitalOut(IOPORT_B, BIT_0);  // RB0 = RS485 control
@@ -775,7 +661,7 @@ void InitializeSystem(void)
     LED = 0;
     SD_CS = 1;
     
-    PORTSetPinsDigitalOut(IOPORT_F, BIT_1);             //RF1 = PWM_DISABLE
+    PORTSetPinsDigitalOut(IOPORT_F, BIT_1 | BIT_2);             //RF1 = PWM_DISABLE, RF2: TEST_OUT
     PWM_DISABLE = 0;
     
     PORTSetPinsDigitalOut(IOPORT_G, BIT_12);   // RG9 = TEST_OUT, RG12 = DIR1 
@@ -790,7 +676,7 @@ void InitializeSystem(void)
     T2CONbits.TCKPS1 = 0;
     T2CONbits.TCKPS0 = 0;    
     PR2 = 4000; // Use 50 microsecond rollover for 20 khz
-   T2CONbits.TON = 1; // Let her rip   
+    T2CONbits.TON = 1; // Let her rip   
     ConfigIntTimer2(T2_INT_ON | T2_INT_PRIOR_2);            
     
     
@@ -819,6 +705,11 @@ void __ISR(_TIMER_2_VECTOR, ipl5) Timer2Handler(void)
     {
         memoryCounter=625;
         memoryFlag = true;
+        if (timeout)
+        {
+            timeout--;
+            if (timeout == 0) LED = 0;
+        }
     }
 }
 
@@ -912,7 +803,7 @@ void __ISR(_CHANGE_NOTICE_VECTOR, ipl2) ChangeNotice_Handler(void)
 }
 
 
-/** EOF main.c *************************************************/
+
 
 // This version uses the PIC 32 SPI port 
 unsigned char SendReceiveSPI(unsigned char dataOut)
@@ -935,53 +826,6 @@ void initHBridgeSPI(void)
 }
 
 
-#define ESC 27
-#define CR 13
-#define BACKSPACE 8
-void __ISR(HOST_VECTOR, IPL2AUTO) IntHostUartHandler(void) 
-{
-unsigned char ch;
-static unsigned long i = 0;
-
-    if (INTGetFlag(INT_SOURCE_UART_RX(HOSTuart))) 
-    {
-        INTClearFlag(INT_SOURCE_UART_RX(HOSTuart));                 
-        if (HOSTbits.OERR || HOSTbits.FERR) {
-            if (UARTReceivedDataIsAvailable(HOSTuart))
-                ch = UARTGetDataByte(HOSTuart);
-            HOSTbits.OERR = 0;            
-        }
-        if (UARTReceivedDataIsAvailable(HOSTuart)) 
-        {
-            ch = UARTGetDataByte(HOSTuart);            
-            if (ch != 0 && ch != '\n') {            
-                if (ch == BACKSPACE) 
-                {
-                    if (i != 0) i--;
-                    HOSTRxBuffer[i] = '\0';
-                    while(!UARTTransmitterIsReady(HOSTuart));
-                    UARTSendDataByte (HOSTuart, ' ');
-                    while(!UARTTransmitterIsReady(HOSTuart));
-                    UARTSendDataByte (HOSTuart, BACKSPACE);                
-                } 
-                else if (i < MAXBUFFER) 
-                {
-                    HOSTRxBuffer[i] = ch;
-                    i++;
-                }            
-                if ('\r' == ch || ' ' == ch) 
-                {
-                    HOSTRxBufferFull = true;
-                    HOSTRxBuffer[i] = '\0';
-                    i = 0;
-                }
-            }
-        }
-    }         
-    
-    if (INTGetFlag(INT_SOURCE_UART_TX(HOSTuart))) 
-        INTClearFlag(INT_SOURCE_UART_TX(HOSTuart));            
-}
 
 // handler for the DMA channel 1 interrupt
 void __ISR(_DMA0_VECTOR, IPL5SOFT) DmaHandler0(void)
@@ -1004,6 +848,7 @@ void __ISR(_DMA0_VECTOR, IPL5SOFT) DmaHandler0(void)
             i++;
         } while (i < MAXBUFFER && ch != ETX);
         RS485RxBufferFull = true;
+        timeout = 32;
         DmaChnClrEvFlags(DMA_CHANNEL0, DMA_EV_BLOCK_DONE);       
         DmaChnEnable(DMA_CHANNEL0);
     }
@@ -1054,6 +899,122 @@ unsigned short decodePacket(unsigned char *ptrInPacket, unsigned char *ptrData)
     return (j);
 }
 
+
+
+#define ESC 27
+#define CR 13
+#define BACKSPACE 8
+void __ISR(HOST_VECTOR, IPL2AUTO) IntHostUartHandler(void) 
+{
+unsigned char ch, inByte;
+static unsigned long i = 0;
+
+    if (INTGetFlag(INT_SOURCE_UART_RX(HOSTuart))) 
+    {
+        INTClearFlag(INT_SOURCE_UART_RX(HOSTuart));                 
+        if (HOSTbits.OERR || HOSTbits.FERR) {
+            if (UARTReceivedDataIsAvailable(HOSTuart))
+                ch = UARTGetDataByte(HOSTuart);
+            HOSTbits.OERR = 0;            
+        }
+        if (UARTReceivedDataIsAvailable(HOSTuart)) 
+        {
+            inByte = UARTGetDataByte(HOSTuart);
+            ch = toupper(inByte);
+            if (ch != 0 && ch != '\n') {            
+                if (ch == BACKSPACE) 
+                {
+                    if (i != 0) i--;
+                    HOSTRxBuffer[i] = '\0';
+                    while(!UARTTransmitterIsReady(HOSTuart));
+                    UARTSendDataByte (HOSTuart, ' ');
+                    while(!UARTTransmitterIsReady(HOSTuart));
+                    UARTSendDataByte (HOSTuart, BACKSPACE);                
+                } 
+                else if (i < MAXBUFFER) 
+                {
+                    HOSTRxBuffer[i] = ch;
+                    i++;
+                }            
+                if ('\r' == ch || ' ' == ch) 
+                {
+                    HOSTRxBufferFull = true;
+                    HOSTRxBuffer[i] = '\0';
+                    i = 0;
+                }
+            }
+        }
+    }         
+    
+    if (INTGetFlag(INT_SOURCE_UART_TX(HOSTuart))) 
+        INTClearFlag(INT_SOURCE_UART_TX(HOSTuart));            
+}
+
+long PIDcontrol(long servoID, struct PIDtype *PID)
+{
+    short Error;     
+    short actualPosition;    
+    short commandPosition; 
+    short pastError;
+    short derError;
+    static short errIndex = 0;
+    float PCorr = 0, ICorr = 0, DCorr = 0;    
+    static short displayCounter = 0;
+       
+    if (servoID < 0 || servoID >= NUMMOTORS) return 0;        
+    
+    actualPosition = PID[servoID].ADActual;    
+    commandPosition = PID[servoID].ADCommand;
+    Error = actualPosition - commandPosition;    
+    
+    pastError = PID[servoID].error[errIndex];    
+    PID[servoID].sumError = PID[servoID].sumError + (float)Error; // - pastError;
+    PID[servoID].error[errIndex] = Error;
+    
+    if (PID[servoID].sumError > MAXSUM) PID[servoID].sumError = MAXSUM;
+    if (PID[servoID].sumError < -MAXSUM) PID[servoID].sumError = -MAXSUM;
+        
+    errIndex++;
+    if (errIndex >= FILTERSIZE) errIndex = 0;             
+    
+    derError = Error - pastError;     
+    
+    PCorr = ((float)Error) * -PID[servoID].kP;    
+    ICorr = ((float)PID[servoID].sumError)  * -PID[servoID].kI;
+    DCorr = ((float)derError) * -PID[servoID].kD;
+
+    float PIDcorrection = PCorr + ICorr + DCorr;
+    
+    if (PIDcorrection == 0)
+    {
+        PID[servoID].PWMvalue = 0;
+        return 0;
+    }
+    else if (PIDcorrection < 0) PID[servoID].PWMvalue = (long) (PIDcorrection - PID[servoID].PWMoffset);            
+    else PID[servoID].PWMvalue = (long) (PIDcorrection + PID[servoID].PWMoffset);                    
+               
+    
+    if (PID[servoID].PWMvalue > PWM_MAX) 
+        PID[servoID].PWMvalue = PWM_MAX;
+    else if (PID[servoID].PWMvalue < -PWM_MAX) 
+        PID[servoID].PWMvalue = -PWM_MAX;                
+    
+    if (servoID == 0 && displayFlag)
+    {
+        displayCounter++;
+        if (displayCounter >= 100)
+        {
+            displayCounter = 0;
+            printf("\rCOM: %d ACT: %d ERR: %d SUM: %0.0f P: %0.1f D: %0.1f I: %0.1f PWM: %d ", commandPosition, actualPosition, Error, PID[servoID].sumError, PCorr, DCorr, ICorr, PID[servoID].PWMvalue); 
+        }
+    }
+    PID[servoID].reset = false;   
+    
+    return 0;
+}
+
+
+/*
 long PIDcontrol(long servoID, struct PIDtype *PID)
 {
     long lngError;     
@@ -1103,22 +1064,68 @@ long PIDcontrol(long servoID, struct PIDtype *PID)
     if (PID[servoID].PWMvalue > PWM_MAX) 
         PID[servoID].PWMvalue = PWM_MAX;
     else if (PID[servoID].PWMvalue < -PWM_MAX) 
-        PID[servoID].PWMvalue = -PWM_MAX;
-                
-    if (displayFlag)
+        PID[servoID].PWMvalue = -PWM_MAX;                
+    
+    if (servoID == 1 && displayFlag)
     {
         lngPosDiff = abs(lngError - PID[servoID].previousError);
         if (lngPosDiff > 2)
         {
-            printf("\rID: %d, COM: %d, ACT: %d, ERR: %d, SUM: %d, P: %d, I: %d, D: %d, PWM: %d", servoID, commandPosition, actualPosition, lngError, PID[servoID].sumError, (int)PCorr, (int)ICorr, (int)DCorr, PID[servoID].PWMvalue);             
-            displayPWMFlag = true;
+            printf("\rCOM: %d, ACT: %d, ERR: %d, SUM: %d, P: %d, I: %d, D: %d, PWM: %d", commandPosition, actualPosition, lngError, PID[servoID].sumError, (int)PCorr, (int)ICorr, (int)DCorr, PID[servoID].PWMvalue);             
             PID[servoID].previousError = lngError;
         }  
     }
     PID[servoID].reset = false;
     return 0;
 }
+*/
 
+
+    /*
+    EEPROM_WP = 0;
+    initI2C(I2C1);   
+    EepromWriteBlock(I2C1, EEPROM_ID, EEPROMmemoryAddress, strEEmesssageOut, EEMessageLength);
+    DelayMs(10);
+    EEPROM_WP = 1;        
+    EepromReadBlock(I2C1, EEPROM_ID, EEPROMmemoryAddress, strEEmesssageIn, EEMessageLength); 
+    strEEmesssageIn[EEMessageLength] = '\0';
+    printf("\rEEprom Message In: %s", strEEmesssageIn);   
+    */
+    
+    /*
+    printf("\rTesting SD card...\r");
+    if (MDD_MediaDetect())
+    {
+        if (FSInit())
+        {
+            filePtr=FSfopen(filename, FS_READ);        
+            if (filePtr==NULL) printf("Error: could not open %s", filename);
+            else 
+            {
+                j = 0;
+                do 
+                {
+                    for (i = 0; i < MAXBUFFER; i++)
+                    {                      
+                        numBytes = FSfread(&ch, 1, 1, filePtr);
+                        if (!numBytes) break;
+                        if (ch == '\n') break;
+                        else MEMORYBuffer[i] = ch;
+                    }                 
+                    if (numBytes)
+                    {
+                        length = i;
+                        MEMORYBuffer[length] = '\0';
+                        printf("#%d: Mem: %s", j++, MEMORYBuffer);
+                    }
+                    else printf("\rSD card blank");
+                } while(!FSfeof(filePtr) && numBytes);
+                FSfclose(filePtr);                                
+            }  
+        }
+    }
+    else printf("ERROR: MEDIA DETECT");    
+    */    
 
 /*
 // RS485 UART interrupt handler it is set at priority level 2
@@ -1198,3 +1205,144 @@ void __ISR(RS485_VECTOR, ipl2) IntRS485UartHandler(void) {
     }
     else printf("\rNo SD card found");    
     */
+
+    //   memoryOffset = FSftell(filePtr);
+    // if (SUCCESS == FSfseek(filePtr, memoryOffset, SEEK_SET))
+            /*
+                        initHBridgeSPI();
+                        ReadHBridgeData(HBridgeData);
+                        SpiChnClose(SPI_CHANNEL);
+                        if (previousOffset != memoryOffset) 
+                        {                                    
+                            printf("HBridge: %02X, %02X, %02X, %02X, ", HBridgeData[0], HBridgeData[1], HBridgeData[2], HBridgeData[3]);                                    
+                            printf("Mem @ %d: %s", memoryOffset, MEMORYBuffer);
+                        }                                
+                        previousOffset = memoryOffset;
+                        */
+
+void ClearCopyBuffer()
+{
+    int i;
+    for (i = 0; i < MAXBUFFER; i++)
+    {
+        RS485RxBufferCopy[i] = '\0';
+        // RS485RxBuffer[i] = '\0';
+    }
+}
+
+
+unsigned char processPacketData(short packetDataLength, unsigned char *ptrPacketData, short *numServos, short *ptrServoPositions, unsigned char *command, unsigned char *subCommand)
+{
+    MConvertType servoValue;    
+    short j, i = 0;  
+    
+    if (!CheckCRC(ptrPacketData, packetDataLength)) return false;    
+    *command = ptrPacketData[i++];
+    *subCommand = ptrPacketData[i++];
+    *numServos = ptrPacketData[i++];
+    
+    
+    if (*numServos > MAXSERVOS) return false;
+    j = 0;
+    while(j < *numServos)
+    {
+        servoValue.b[0] = ptrPacketData[i++];
+        servoValue.b[1] = ptrPacketData[i++];
+        ptrServoPositions[j++] = servoValue.integer;
+    }
+    return true;
+}
+unsigned char ReadHBridgeData(unsigned char *ptrData)
+{
+    unsigned char dataOut = 0;
+    
+    PWM_SPI_CS = 0;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[0] = dataOut;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[1] = dataOut;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[2] = dataOut;
+    dataOut = SendReceiveSPI(0b00000000);
+    ptrData[3] = dataOut;
+    PWM_SPI_CS = 1;
+    
+    return 0;
+}
+
+
+
+void makeFloatString(float InValue, int numDecimalPlaces, unsigned char *arrAscii)
+{
+    int i = 0, j = 0;        
+    float floValue = InValue;
+    unsigned char digit;
+    
+    if (floValue < 0)
+    {
+        floValue = 0 - floValue;
+        arrAscii[j++] = '-';
+    }
+    while (floValue >= 1)
+    {
+        floValue = floValue / 10.0;
+        i++;
+    }
+    if (i == 0) 
+    {
+        arrAscii[j++] = '0';
+        arrAscii[j++] = '.';
+    }
+    else
+    {
+        while (i > 0)
+        {
+            floValue = floValue * 10;
+            digit = (unsigned char)floValue;
+            arrAscii[j++] = digit + '0';
+            floValue = floValue - (float) digit;
+            i--;
+        }
+        arrAscii[j++] = '.';
+    }
+    if (numDecimalPlaces > 0)
+    {        
+        i = numDecimalPlaces;
+        while (i > 0)
+        {  
+            floValue = floValue * 10;
+            digit = (unsigned char)floValue;
+            arrAscii[j++] = digit + '0';
+            floValue = floValue - (float) digit;
+            i--;                         
+        }
+    }
+    else arrAscii[j++] = '0';
+    arrAscii[j++] = '\0';
+}
+
+void ResetPID()
+{
+    int i, j;
+    for (i = 0; i < NUMMOTORS; i++)
+    {
+        PID[i].sumError = 0; // For 53:1 ratio Servo City motor
+        PID[i].kP = 5.0;  
+        PID[i].kI = 0.001; 
+        PID[i].kD = 5.0; 
+        PID[i].PWMoffset = 400;
+        PID[i].PWMvalue = 0;
+        PID[i].ADActual = 0;
+        PID[i].ADCommand = 0;
+        PID[i].reset = true;
+        for (j = 0; j < FILTERSIZE; j++) PID[i].error[j] = 0;
+    }
+}
+
+void PrintServoData(short numServos, short *ptrServoPositions, unsigned char command, unsigned char subCommand)
+{
+    int i;
+    printf("\rOK! Com: %d, Sub: %d, servos %d: ", command, subCommand, numServos);
+    for (i = 0; i < 10; i++) printf("%d, ", ptrServoPositions[i]);
+}
+

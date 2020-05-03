@@ -4,6 +4,10 @@
     <open-files xmlns="http://www.netbeans.org/ns/projectui-open-files/2">
         <group>
             <file>file:/C:/Users/Jim/Documents/Work/Robotnik%20Brain%20Board/Firmware/main.c</file>
+            <file>file:/C:/Users/Jim/Documents/Work/Robotnik%20Brain%20Board/Firmware/SD-SPI.c</file>
+            <file>file:/C:/Users/Jim/Documents/Work/Robotnik%20Brain%20Board/Firmware/Defs.h</file>
+            <file>file:/C:/Users/Jim/Documents/Work/Robotnik%20Brain%20Board/Firmware/SD-SPI.h</file>
+            <file>file:/C:/Users/Jim/Documents/Work/Robotnik%20Brain%20Board/Firmware/FSconfig.h</file>
         </group>
     </open-files>
 </project-private>

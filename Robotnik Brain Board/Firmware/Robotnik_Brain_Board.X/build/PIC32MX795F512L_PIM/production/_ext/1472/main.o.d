@@ -9,6 +9,6 @@ build/PIC32MX795F512L_PIM/production/_ext/1472/main.o:  \
  ../I2C_4BUS_EEPROM_PIC32.h  \
 ../FSIO.h  \
 ../FSconfig.h  \
-../Defs.h  \
 ../FSDefs.h  \
+../Defs.h  \
  ../SD-SPI.h 

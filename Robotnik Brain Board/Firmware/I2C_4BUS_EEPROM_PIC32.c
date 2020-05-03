@@ -200,7 +200,8 @@ unsigned char dataByte = 0;
  *	As each byte is written, an ACKnowledge bit is read from EEPROM
  *	
  *******************************************************************/
-unsigned char EepromWriteBlock(unsigned char busID, unsigned char device, unsigned short startAddress, unsigned char *ptrData, unsigned short numBytes) {
+unsigned char EepromWriteBlock(unsigned char busID, unsigned char device, unsigned short startAddress, unsigned char *ptrData, unsigned short numBytes) 
+{
     unsigned char addressHigh, addressLow;
     unsigned short i;    
     
@@ -246,7 +247,8 @@ unsigned char EepromWriteBlock(unsigned char busID, unsigned char device, unsign
  *  Output: *ptrData - pointer to data read from EEPROM 
  *  Returns: 1 if successful, 0 if EEPROM does not ACKnowledge a command.
  */
-unsigned char EepromReadBlock(unsigned char busID, unsigned char device, unsigned short startAddress, unsigned char *ptrData, unsigned char numBytes) {
+unsigned char EepromReadBlock(unsigned char busID, unsigned char device, unsigned short startAddress, unsigned char *ptrData, unsigned char numBytes) 
+{
     unsigned char addressHigh, addressLow;
     unsigned char i;
 

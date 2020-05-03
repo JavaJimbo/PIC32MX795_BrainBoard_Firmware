@@ -14,6 +14,7 @@
 #define SUCCESS 0
 
 // #define TEST_OUT LATGbits.LATG9
+#define TEST_OUT LATFbits.LATF2
 
 #define	STX '>'
 #define	DLE '/'
@@ -33,21 +34,18 @@
 
 
 #define FILTERSIZE 400
+
 struct PIDtype
 {
     short error[FILTERSIZE];
-    long sumError;    
+    float sumError;    
     float kP;
     float kI;
     float kD;
     unsigned long PWMoffset;
-    long PWMvalue;
-    long PreviousPWMvalue;
-    long Rollovers;
-    long ADActual;
-    long ADPrevious;
-    long ADCommand;
-    long previousError;
+    short PWMvalue;
+    short ADActual;
+    short ADCommand;
     unsigned char reset;    
 } PID[NUMMOTORS];
 

@@ -6,6 +6,6 @@ build/PIC32MX795F512L_PIM/production/_ext/1472/SD-SPI.o:  \
  ../HardwareProfile\ -\ PIC32MX795F512L\ PIM.h  \
 ../FSIO.h  \
 ../FSconfig.h  \
- ../Defs.h  \
-../FSDefs.h  \
-../SD-SPI.h 
+ ../FSDefs.h  \
+../SD-SPI.h  \
+../Defs.h 
